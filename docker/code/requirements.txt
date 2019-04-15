@@ -1,0 +1,9 @@
+pandas
+numpy
+scipy
+jupyter
+matplotlib
+tensorflow
+keras
+cmapPy
+ipyparallel
