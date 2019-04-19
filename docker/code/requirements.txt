@@ -1,9 +1,7 @@
 pandas
 numpy
 scipy
-jupyter
-matplotlib
-tensorflow
 keras
-cmapPy
-ipyparallel
+scikit-image
+Pillow
+opencv-contrib-python

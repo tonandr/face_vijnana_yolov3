@@ -19,9 +19,10 @@ from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU
 from keras.layers.merge import add, concatenate
 from keras.utils import multi_gpu_model
 import keras.backend as K
-from keras.utils.data_utils import Sequence
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
+from keras.utils.data_utils import Sequence
+#from space.yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
 
 # Constants.
 DEBUG = True
@@ -406,7 +407,7 @@ class FaceDetector(object):
 #                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
          
                 # write the image with bounding boxes to file.
-#                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
+#               print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
 #                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))
     
     class TrainingSequence(Sequence):
