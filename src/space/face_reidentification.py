@@ -20,6 +20,7 @@ from keras.layers.merge import add, concatenate
 from keras.utils import multi_gpu_model
 from keras.utils.data_utils import Sequence
 import keras.backend as K
+from keras import optimizers
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
 from face_detection import FaceDetector
@@ -130,133 +131,82 @@ class FaceReIdentifier(object):
             self.raw_data_path = raw_data_path
             self.hps = hps
             self.db = pd.read_csv('db.csv')
+            self.db = self.db.iloc[:, 1:]
+            self.t_indexes = np.asarray(self.db.index)
             self.db_g = self.db.groupby('subject_id')
-            self.img_pairs = []
             self.df_non_id = self.db_g.get_groups(-1)
+            self.ex_indexes = np.asarray(self.df_non_id.index)
+            
+            self.img_pairs = []
+            
+            valid_indexes = []
+            for v in self.t_indexes:
+                if (self.ex_indexes == v).any():
+                    valid_indexes.append(False)
+                else:
+                    valid_indexes.append(True)
+            
+            valid_indexes = np.asarray(valid_indexes)
+            valid_indexes = self.t_indexes[valid_indexes]
             
             for i in self.db_g.groups.keys():
                 if i == -1:
                     continue
                 
                 df = self.db_g.get_group(i)
+                ex_indexes2 = np.asarray(df.index)
                 
+                # Positive sample pair.
+                for k in range(0, ex_indexes2.shape[0] - 1):
+                    for l in range(k + 1, ex_indexes2.shape[0]):
+                        self.img_pairs.append((ex_indexes2[k], ex_indexes2[l], 1.)) 
                 
+                # Negative sample pair.
+                ex_inv_idxes = []
+                for v in ex_indexes2:
+                    if (valid_indexes == v).any():
+                        ex_inv_idxes.append(False)
+                    else:
+                        ex_inv_idxes.append(True)
+                ex_inv_idxes = np.asarray(ex_inv_idxes)
+                valid_indexes2 = valid_indexes[ex_inv_idxes]                
+                
+                for j in ex_indexes2:
+                    self.img_pairs.append((j, np.random.choice(valid_indexes2, size=1)[0], 0.))
+            
+            self.steps = self.hps['step_per_epoch']
+            self.batch_size = len(self.img_pairs) // self.steps
                 
         def __len__(self):
-            return int(np.floor(len(self.file_names) / self.batch_size))
+            return self.steps
         
         def __getitem__(self, index):
             # Check the last index.
             # TODO
             
-            images = []
+            images_a = []
+            images_c = []
             gt_tensors = []
             
             for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
-                file_name = self.file_names[bi] 
-                #if DEBUG: print(file_name )
+                # Get the anchor and comparison images.
+                image_a = cv.imread(os.path.join(self.raw_data_path
+                                                 , 'subject_faces'
+                                                 , self.db.loc[self.img_pairs[bi][0], 'face_file']))
+                image_c = cv.imread(os.path.join(self.raw_data_path
+                                                 , 'subject_faces'
+                                                 , self.db.loc[self.img_pairs[bi][1], 'face_file']))
                 
-                df = self.gt_df_g.get_group(file_name)
-                df.index = range(df.shape[0])
+                images_a.append(image_a)
+                images_c.append(image_c)
+                    
+                # Create a ground truth.
+                gt_tensor = np.asarray([self.img_pair[bi, 2]])
                 
-                # Load an image.
-                image = cv.imread(os.path.join(self.raw_data_path, file_name))
-                                        
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
-             
-                # Adjust the original image size into the normalized image size according to the ratio of width, height.
-                w = image.shape[1]
-                h = image.shape[0]
-                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
-                                
-                if w >= h:
-                    w_p = self.hps['image_size']
-                    h_p = int(h / w * self.hps['image_size'])
-                    pad = self.hps['image_size'] - h_p
-                    
-                    if pad % 2 == 0:
-                        pad_t = pad // 2
-                        pad_b = pad // 2
-                    else:
-                        pad_t = pad // 2
-                        pad_b = pad // 2 + 1
-    
-                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
-                else:
-                    h_p = self.hps['image_size']
-                    w_p = int(w / h * self.hps['image_size'])
-                    pad = self.hps['image_size'] - w_p
-                    
-                    if pad % 2 == 0:
-                        pad_l = pad // 2
-                        pad_r = pad // 2
-                    else:
-                        pad_l = pad // 2
-                        pad_r = pad // 2 + 1                
-                    
-                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
-                    
-                # Create a ground truth bound box tensor (13x13x6).
-                gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
-                
-                for i in range(df.shape[0]):
-                    # Calculate a target feature tensor according to the ratio of width, height.
-                    # Calculate a transformed raw bound box.
-                    #print(df.columns)
-                    x1 = int(df.loc[i, 'FACE_X'])
-                    y1 = int(df.loc[i, 'FACE_Y'])
-                    x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
-                    y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
-                    wb = x2 - x1 + 1
-                    hb = y2 - y1 + 1
-                    
-                    if w >= h:
-                        x1_p = int(x1 / w * self.hps['image_size'])
-                        y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                        x2_p = int(x2 / w * self.hps['image_size'])
-                        y2_p = int(y2 / w * self.hps['image_size']) + pad_t
-                    else:
-                        x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                        y1_p = int(y1 / h * self.hps['image_size'])
-                        x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                        y2_p = int(y2 / h * self.hps['image_size'])                   
-                    
-                    # Calculate a cell position.
-                    xc_p = (x1_p + x2_p) // 2
-                    yc_p = (y1_p + y2_p) // 2
-                    cx = xc_p // self.cell_image_size
-                    cy = yc_p // self.cell_image_size
-                    
-                    # Calculate a bound box's ratio coordinate.
-                    bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
-                    by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
-                    
-                    if w >= h: 
-                        bw_p = wb / w #?
-                        bh_p = hb / w
-                    else:
-                        bw_p = wb / h
-                        bh_p = hb / h
-                    
-                    # Assign a bound box's values into the tensor.
-                    gt_tensor[cy, cx, 0] = 1.
-                    gt_tensor[cy, cx, 1] = bx_p
-                    gt_tensor[cy, cx, 2] = by_p
-                    gt_tensor[cy, cx, 3] = bw_p
-                    gt_tensor[cy, cx, 4] = bh_p
-                    gt_tensor[cy, cx, 5] = 1.
-                    
-                images.append(image)
                 gt_tensors.append(gt_tensor)
                                                                          
-            return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)}) 
+            return ({'input_a': np.asarray(images_a), 'input_c': np.asarray(images_c)}
+                    , {'output': np.asarray(gt_tensors)}) 
 
     def __init__(self, raw_data_path, hps, model_loading):
         """
@@ -279,27 +229,36 @@ class FaceReIdentifier(object):
         else:
             # Design the face re-identification model.
             # Inputs.
-            input_a = Input(shape=(hps['x_size', hps['y_size'], 3]))
-            input_c = Input(shape=(hps['x_size', hps['y_size'], 3]))
+            input_a = Input(shape=(hps['image_size', hps['image_size'], 3]), name='input_a')
+            input_c = Input(shape=(hps['image_size', hps['image_size'], 3]), name='input_c')
 
             # Load yolov3 as the base model.
             base = self.YOLOV3Base 
             
             # Get both face features.
-            xa = base(input_a) # Linear?
+            xa = base(input_a) # Non-linear.
             xc = base(input_c)
             
             # Calculate the difference of both face features.
             xd = Lambda(lambda x: K.sqrt(K.sum(K.pow(x[0] - x[1], 2.))))([xa, xc]) #?
-            output = Dense(1, activation='sigmoid')(xd)
+            output = Dense(1, activation='sigmoid', name='output')(xd)
 
             if MULTI_GPU:
                 self.model = multi_gpu_model(Model(inputs=[input_a, input_c], outputs=[output])
                                                    , gpus = NUM_GPUS)
             else:
                 self.model = Model(inputs=[input_a, input_c], outputs=[output])
+
+            opt = optimizers.Adam(lr=self.hps['lr']
+                                    , beta_1=self.hps['beta_1']
+                                    , beta_2=self.hps['beta_2']
+                                    , decay=self.hps['decay'])
             
-            self.model.compile(optimizer='adam', loss='binary_crossentropy')
+            self.model.compile(optimizer=opt, loss='binary_crossentropy')
+            self.model.summary()
+
+        # Create face detector.
+        self.fd = FaceDetector(self.raw_data_path, self.hps, True)
 
     @property
     def YOLOV3Base(self):
@@ -511,15 +470,10 @@ class FaceReIdentifier(object):
         base = Model(inputs=[input], outputs=[output])
         return base
         
-    def train(self, trGen):
-        """Train face detector.
-        
-        Parameters
-        ----------
-        trGen : generator
+    def train(self):
+        """Train face detector."""
+        trGen = self.TrainingSequence(self.raw_data_path, self.hps)
             
-            TODO
-        """     
         self.model.fit_generator(trGen
                       , steps_per_epoch=self.hps['step_per_epoch']                  
                       , epochs=self.hps['epochs']
@@ -528,6 +482,108 @@ class FaceReIdentifier(object):
                       , workers=1
                       , use_multiprocessing=False)
     
+    def test(self, test_path, output_file_path):
+        """Test.
+        
+        Parameters
+        ----------
+        test_path : string
+            Testing directory.
+        output_file_path : string
+            Output file path.
+        """        
+        file_names = glob.glob(os.path.join(test_path, '*.jpg'))
+                
+        # Detect faces and save results.
+        with open(output_file_path, 'w') as f:
+            for file_name in file_names:
+                if DEBUG: print(file_name)
+                
+                # Load an image.
+                image = cv.imread(os.path.join(test_path, file_name))
+                image_o_size = (image.shape[0], image.shape[1])
+                image_o = image.copy() 
+                
+                r = image[:, :, 0].copy()
+                g = image[:, :, 1].copy()
+                b = image[:, :, 2].copy()
+                image[:, :, 0] = b
+                image[:, :, 1] = g
+                image[:, :, 2] = r 
+             
+                # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                w = image.shape[1]
+                h = image.shape[0]
+                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                
+                if w >= h:
+                    w_p = self.hps['image_size']
+                    h_p = int(h / w * self.hps['image_size'])
+                    pad = self.hps['image_size'] - h_p
+                    
+                    if pad % 2 == 0:
+                        pad_t = pad // 2
+                        pad_b = pad // 2
+                    else:
+                        pad_t = pad // 2
+                        pad_b = pad // 2 + 1
+    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                else:
+                    h_p = self.hps['image_size']
+                    w_p = int(w / h * self.hps['image_size'])
+                    pad = self.hps['image_size'] - w_p
+                    
+                    if pad % 2 == 0:
+                        pad_l = pad // 2
+                        pad_r = pad // 2
+                    else:
+                        pad_l = pad // 2
+                        pad_r = pad // 2 + 1                
+                    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+       
+                image = image[np.newaxis, :]
+                       
+                # Detect faces.
+                boxes = self.fd.detect(image, image_o_size)
+                
+                # correct the sizes of the bounding boxes
+                for box in boxes:
+                    if w >= h:
+                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                    else:
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                        
+                count = 1
+                
+                for box in boxes:
+                    if count > 60:
+                        break
+                    
+                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
+                    count +=1
+
+                # Check exception.
+                if len(boxes) == 0:
+                    continue
+
+                # draw bounding boxes on the image using labels.
+#                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
+         
+                # write the image with bounding boxes to file.
+#                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
+#                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))"
+        
     def identify(self, images_a, images_c):
         """Identify faces.
         
