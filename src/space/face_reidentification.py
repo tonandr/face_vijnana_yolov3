@@ -37,8 +37,9 @@ def create_db_fri(raw_data_path, hps):
     # Collect face region images and create db, by subject ids.
     db = pd.DataFrame(columns=['subject_id', 'face_file', 'w', 'h'])
     
-    for id in gt_df_g.groups.keys():
-        df = gt_df_g.get_group(id)
+    for k in gt_df_g.groups.keys():
+        if k == -1: continue
+        df = gt_df_g.get_group(k)
         
         for i in range(df.shape[0]):
             file_name = df.iloc[i, 1]
@@ -88,7 +89,7 @@ def create_db_fri(raw_data_path, hps):
                 image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                
         
             # Write a face region image.
-            face_file_name = file_name[:-4] + '_' + str(id) + '_'+ file_name[-4:]
+            face_file_name = file_name[:-4] + '_' + str(k) + '_'+ file_name[-4:]
                 
             print('Save ' + face_file_name)
             imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name, (image).astype('uint8')))            
