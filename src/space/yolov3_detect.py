@@ -518,6 +518,23 @@ def draw_boxes_v2(rawImage, boxes, cls_thresh):
         imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), (0, 255, 0))
         image = np.asarray(imageObject)
     
+    return image
+
+def draw_boxes_v3(rawImage, boxes, cls_thresh):
+    image = copy.copy(rawImage)
+    
+    for box in boxes:        
+        print(str(box.get_score()) + ', ' + str(box.classes[0]) + '\n')
+        
+        image = copy.copy(image)
+        rr, cc = polygon_perimeter((box.ymin, box.ymin, box.ymax, box.ymax) 
+                                              , (box.xmin, box.xmax, box.xmax, box.xmin), shape = image.shape)
+        set_color(image, (rr, cc), (255,0,0))
+        imageObject = Image.fromarray(image, mode='RGB')
+        imageDraw = ImageDraw.Draw(imageObject)
+        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), (255, 0, 0))
+        image = np.asarray(imageObject)
+    
     return image 
 
 def get_person_boxes(boxes, labels, cls_thresh, human_entropy_thresh, bottle_entropy_thresh):
