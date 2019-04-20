@@ -19,6 +19,7 @@ from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU
 from keras.layers.merge import add, concatenate
 from keras.utils import multi_gpu_model
 import keras.backend as K
+from keras import optimizers
 from keras.utils.data_utils import Sequence
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
@@ -76,8 +77,13 @@ class FaceDetector(object):
                                                    , gpus = NUM_GPUS)
             else:
                 self.model = Model(inputs=[input], outputs=[output])
+
+            opt = optimizers.Adam(lr=self.hps['lr']
+                                    , beta_1=self.hps['beta_1']
+                                    , beta_2=self.hps['beta_2']
+                                    , decay=self.hps['decay'])
             
-            self.model.compile(optimizer='adam', loss='mse') #?
+            self.model.compile(optimizer=opt, loss='mse')
             self.model.summary()
 
     @property
@@ -864,6 +870,10 @@ def main(args):
         # hps.
         hps['image_size'] = int(args.image_size)    
         hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
         hps['step_per_epoch'] = int(args.step_per_epoch)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
@@ -888,6 +898,10 @@ def main(args):
         # hps.
         hps['image_size'] = int(args.image_size) 
         hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
         hps['step_per_epoch'] = int(args.step_per_epoch)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
@@ -915,6 +929,10 @@ if __name__ == '__main__':
     parser.add_argument('--output_file_path')
     parser.add_argument('--image_size')
     parser.add_argument('--num_filters')
+    parser.add_argument('--lr')
+    parser.add_argument('--beta_1')
+    parser.add_argument('--beta_2')
+    parser.add_argument('--decay')
     parser.add_argument('--step_per_epoch')
     parser.add_argument('--epochs')
     parser.add_argument('--face_conf_th')
