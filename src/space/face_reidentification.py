@@ -45,14 +45,28 @@ def create_db_fri(raw_data_path, hps):
             file_name = df.iloc[i, 1]
             
             # Load an image.
-            image = cv.imread(os.path.join(raw_data_path, file_name))
+            image = cv.imread(os.path.join(raw_data_path, 'training', file_name))
             
+            # Check exception.
+            res = df.iloc[i, 3:] > 0
+            if res.all() == False:
+                continue
+            
+            r = image[:, :, 0].copy()
+            g = image[:, :, 1].copy()
+            b = image[:, :, 2].copy()
+            image[:, :, 0] = b
+            image[:, :, 1] = g
+            image[:, :, 2] = r
+                        
             # Crop a face region.
-            l, t, r, b = (df.iloc[i, 3]
-                , df.iloc[i, 4]
-                , (df.iloc[i, 3] + df.iloc[i, 5] - 1)
-                , (df.iloc[i, 4] + df.iloc[i, 6] - 1))        
-            image = image[(t -1):(b -1), (l - 1):(r - 1), :]
+            l, t, r, b = (int(df.iloc[i, 3])
+                , int(df.iloc[i, 4])
+                , int((df.iloc[i, 3] + df.iloc[i, 5] - 1))
+                , int((df.iloc[i, 4] + df.iloc[i, 6] - 1)))
+
+                    
+            image = image[(t - 1):(b - 1), (l - 1):(r - 1), :]
             
             # Adjust the original image size into the normalized image size according to the ratio of width, height.
             w = image.shape[1]
@@ -70,7 +84,7 @@ def create_db_fri(raw_data_path, hps):
                 else:
                     pad_t = pad // 2
                     pad_b = pad // 2 + 1
-
+                 
                 image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
                 image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
             else:
@@ -89,13 +103,14 @@ def create_db_fri(raw_data_path, hps):
                 image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                
         
             # Write a face region image.
-            face_file_name = file_name[:-4] + '_' + str(k) + '_'+ file_name[-4:]
-                
+            face_file_name = file_name[:-4] + '_' + str(k) + '_' \
+                + str(int(df.iloc[i, 3])) + '_' + str(int(df.iloc[i, 4])) + file_name[-4:]
+                                
             print('Save ' + face_file_name)
-            imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name, (image).astype('uint8')))            
+            imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name), (image).astype('uint8'))           
             
             # Add subject face information into db.
-            db = pd.concat([db, pd.DataFrame({'subject_id': [id]
+            db = pd.concat([db, pd.DataFrame({'subject_id': [k]
                                                   , 'face_file': [face_file_name]
                                                   , 'w': [w]
                                                   , 'h': [h]})])
@@ -243,16 +258,19 @@ class FaceReIdentifier(object):
                                                                          
             return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)}) 
 
-    def __init__(self, hps, model_loading):
+    def __init__(self, raw_data_path, hps, model_loading):
         """
         Parameters
         ----------
+        raw_data_path : string
+            Raw data path
         hps : dictionary
             Hyper-parameters
         model_loading : boolean 
             Face re-identification model loading flag
         """
         # Initialize.
+        self.raw_data_path = raw_data_path
         self.hps = hps
         self.model_loading = model_loading
         
@@ -510,8 +528,6 @@ class FaceReIdentifier(object):
                       , workers=1
                       , use_multiprocessing=False)
     
-    
-     
     def identify(self, images_a, images_c):
         """Identify faces.
         
@@ -531,3 +547,106 @@ class FaceReIdentifier(object):
         idents = np.squeeze(idents) #?
         
         return idents
+
+def main(args):
+    """Main.
+    
+    Parameters
+    ----------
+    args : argument type 
+        Arguments
+    """
+    hps = {}
+
+    if args.mode == 'data':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size)    
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+             
+        # Create db.
+        ts = time.time()
+        create_db_fri(raw_data_path, hps)
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))            
+    elif args.mode == 'train':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size)    
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
+        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['epochs'] = int(args.epochs) 
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+        
+        model_loading = False if int(args.model_loading) == 0 else True        
+        
+        # Train.
+        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        
+        ts = time.time()
+        fr.train()
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))
+    elif args.mode == 'test':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+        output_file_path = args.output_file_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size) 
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
+        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['epochs'] = int(args.epochs) 
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+        
+        model_loading = False if int(args.model_loading) == 0 else True        
+        
+        # Test.
+        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        
+        ts = time.time()
+        fr.test(raw_data_path, output_file_path)
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))
+        
+if __name__ == '__main__':
+    
+    # Parse arguments.
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument('--mode')
+    parser.add_argument('--raw_data_path')
+    parser.add_argument('--output_file_path')
+    parser.add_argument('--image_size')
+    parser.add_argument('--lr')
+    parser.add_argument('--beta_1')
+    parser.add_argument('--beta_2')
+    parser.add_argument('--decay')
+    parser.add_argument('--step_per_epoch')
+    parser.add_argument('--epochs')
+    parser.add_argument('--face_conf_th')
+    parser.add_argument('--nms_iou_th')
+    parser.add_argument('--num_cands')
+    parser.add_argument('--model_loading')
+    args = parser.parse_args()
+    
+    main(args)
