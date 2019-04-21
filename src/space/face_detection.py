@@ -890,6 +890,34 @@ def main(args):
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
+    elif args.mode == 'evaluate':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+        output_file_path = args.output_file_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size) 
+        hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
+        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['epochs'] = int(args.epochs) 
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+        
+        model_loading = False if int(args.model_loading) == 0 else True        
+        
+        # Test.
+        fd = FaceDetector(raw_data_path, hps, model_loading)
+        
+        ts = time.time()
+        fd.test(raw_data_path, output_file_path)
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))
     elif args.mode == 'test':
         # Get arguments.
         raw_data_path = args.raw_data_path
