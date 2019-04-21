@@ -22,7 +22,7 @@ import keras.backend as K
 from keras import optimizers
 from keras.utils.data_utils import Sequence
 
-from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
+from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
 
 # Constants.
 DEBUG = True
@@ -311,7 +311,130 @@ class FaceDetector(object):
                       , use_multiprocessing=True)
         
         print('Save the model.')            
-        self.model.save(self.MODEL_FILE_NAME)        
+        self.model.save(self.MODEL_FILE_NAME)
+    
+    def evaluate(self, test_path, output_file_path):
+        """Evaluate.
+        
+        Parameters
+        ----------
+        test_path : string
+            Testing directory.
+        output_file_path : string
+            Output file path.
+        """
+        gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
+        gt_df_g = gt_df.groupby('FILE')        
+        file_names = glob.glob(os.path.join(test_path, '*.jpg'))
+                
+        # Detect faces and save results.
+        with open(output_file_path, 'w') as f:
+            for file_name in file_names:                
+                if DEBUG: print(file_name)
+                
+                # Load an image.
+                image = cv.imread(os.path.join(test_path, file_name))
+                image_o_size = (image.shape[0], image.shape[1])
+                image_o = image.copy() 
+                
+                r = image[:, :, 0].copy()
+                g = image[:, :, 1].copy()
+                b = image[:, :, 2].copy()
+                image[:, :, 0] = b
+                image[:, :, 1] = g
+                image[:, :, 2] = r 
+             
+                # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                w = image.shape[1]
+                h = image.shape[0]
+                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                
+                if w >= h:
+                    w_p = self.hps['image_size']
+                    h_p = int(h / w * self.hps['image_size'])
+                    pad = self.hps['image_size'] - h_p
+                    
+                    if pad % 2 == 0:
+                        pad_t = pad // 2
+                        pad_b = pad // 2
+                    else:
+                        pad_t = pad // 2
+                        pad_b = pad // 2 + 1
+    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                else:
+                    h_p = self.hps['image_size']
+                    w_p = int(w / h * self.hps['image_size'])
+                    pad = self.hps['image_size'] - w_p
+                    
+                    if pad % 2 == 0:
+                        pad_l = pad // 2
+                        pad_r = pad // 2
+                    else:
+                        pad_l = pad // 2
+                        pad_r = pad // 2 + 1                
+                    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+       
+                image = image[np.newaxis, :]
+                       
+                # Detect faces.
+                boxes = self.detect(image, image_o_size)
+                
+                # correct the sizes of the bounding boxes
+                for box in boxes:
+                    if w >= h:
+                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                    else:
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                        
+                count = 1
+                
+                for box in boxes:
+                    if count > 60:
+                        break
+                    
+                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
+                    count +=1
+
+                # Check exception.
+                if len(boxes) == 0:
+                    continue
+
+                # Draw bounding boxes of ground truth.
+                df = gt_df_g.get_group(file_name)
+                gt_boxes = []
+                
+                for i in range(df.shape[0]):
+                    # Check exception.
+                    res = gt_df.iloc[i, 3:] > 0
+                    if res.all() == False:
+                        continue
+                    
+                    xmin = int(df.iloc[i, 3])
+                    xmax = int(xmin + df.iloc[i, 5] - 1)
+                    ymin = int(df.iloc[i, 4])
+                    ymax = int(ymin + df.iloc[i, 6] - 1)                    
+                    gt_box = BoundBox(xmin, xmax, ymin, ymax, objness=1., classes=[1.0])
+                    gt_boxes.append(gt_box)
+                    
+                image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th']) 
+                
+                # Draw bounding boxes on the image using labels.
+                image = draw_boxes_v2(image, boxes, self.hps['face_conf_th']) 
+         
+                # Write the image with bounding boxes to file.
+                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
+                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))                
         
     def test(self, test_path, output_file_path):
         """Test.
@@ -494,6 +617,11 @@ class FaceDetector(object):
                 gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
                 
                 for i in range(df.shape[0]):
+                    # Check exception.
+                    res = df.iloc[i, 3:] > 0
+                    if res.all() == False:
+                        continue
+                
                     # Calculate a target feature tensor according to the ratio of width, height.
                     # Calculate a transformed raw bound box.
                     #print(df.columns)
@@ -910,11 +1038,11 @@ def main(args):
         
         model_loading = False if int(args.model_loading) == 0 else True        
         
-        # Test.
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+
+        fd = FaceDetector(raw_data_path, hps, True)
         
         ts = time.time()
-        fd.test(raw_data_path, output_file_path)
+        fd.evaluate(raw_data_path, output_file_path)
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
@@ -939,7 +1067,7 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Test.
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+        fd = FaceDetector(raw_data_path, hps, True)
         
         ts = time.time()
         fd.test(raw_data_path, output_file_path)

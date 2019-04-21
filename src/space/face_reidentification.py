@@ -7,15 +7,17 @@ Created on Apr 9, 2019
 import os
 import glob
 import argparse
-import time 
+import time
+import pickle
 
 import numpy as np
 import pandas as pd
 import cv2 as cv
 from skimage.io import imread, imsave
+from scipy.stats import entropy
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU
+from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU, Flatten
 from keras.layers.merge import add, concatenate
 from keras.utils import multi_gpu_model
 from keras.utils.data_utils import Sequence
@@ -229,18 +231,31 @@ class FaceReIdentifier(object):
         else:
             # Design the face re-identification model.
             # Inputs.
-            input_a = Input(shape=(hps['image_size', hps['image_size'], 3]), name='input_a')
-            input_c = Input(shape=(hps['image_size', hps['image_size'], 3]), name='input_c')
+            input_a = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input_a')
+            input_c = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input_c')
 
             # Load yolov3 as the base model.
             base = self.YOLOV3Base 
             
-            # Get both face features.
+            # Get both facial ids.
             xa = base(input_a) # Non-linear.
-            xc = base(input_c)
+            xa = Flatten()(xa)
             
-            # Calculate the difference of both face features.
-            xd = Lambda(lambda x: K.sqrt(K.sum(K.pow(x[0] - x[1], 2.))))([xa, xc]) #?
+            for i in range(self.hps['num_dense1_layers']):
+                xa = Dense(self.hps['dense1'], activation='linear', name='dense1_anchor_' + str(i))(xa)
+            
+            xc = base(input_c)
+            xc = Flatten()(xc)
+            
+            for i in range(self.hps['num_dense1_layers']):
+                xc = Dense(self.hps['dense1'], activation='linear', name='dense1_comp_' + str(i))(xc)           
+            
+            # Calculate the difference of both face features and judge a same person.
+            xd = Lambda(lambda x: K.sqrt(K.sum(K.pow(x[0] - x[1], 2.))), name='lambda1')([xa, xc]) #?
+            
+            for i in range(self.hps['num_dense2_layers']):
+                xd = Dense(self.hps['dense2'], activation='relu', name='dense2_' + str(i))(xd)
+            
             output = Dense(1, activation='sigmoid', name='output')(xd)
 
             if MULTI_GPU:
@@ -259,6 +274,39 @@ class FaceReIdentifier(object):
 
         # Create face detector.
         self.fd = FaceDetector(self.raw_data_path, self.hps, True)
+
+    def _make_fid_extractor(self):
+        """Make facial id extractor."""
+        # Design the face re-identification model.
+        # Inputs.
+        input = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input')
+
+        # Load yolov3 as the base model.
+        base = self.YOLOV3Base 
+        
+        # Get facial id.
+        x = base(input) # Non-linear.
+        x = Flatten()(x)
+        
+        for i in range(self.hps['num_dense1_layers']):
+            x = self.model.get_layer('dense1_anchor_' + str(i))(x)
+        
+        facial_id = x
+        self.fid_extractor = Model(inputs=[input], outputs=[facial_id])
+    
+    def _make_face_identifier(self):
+        """Make face identifier."""
+        facial_id_a = Input(shape=(self.hps['dense1'], 1)) # Dimension?
+        facial_id_c = Input(shape=(self.hps['dense1'], 1)) # Dimension?
+        
+        # Calculate the difference of both face features and judge a same person.
+        xd = self.model.get_layer('lambda1')([facial_id_a, facial_id_c]) #?
+        
+        for i in range(self.hps['num_dense2_layers']):
+            xd = self.model.get_layer('dense2_' + str(i))(xd)
+        
+        output = self.model.get_layer('output')(xd)
+        self.face_identifier(inputs=[facial_id_a, facial_id_a], outputs=[output])
 
     @property
     def YOLOV3Base(self):
@@ -482,6 +530,41 @@ class FaceReIdentifier(object):
                       , workers=1
                       , use_multiprocessing=False)
     
+    def register_facial_ids(self):
+        """Register facial ids."""
+        db = pd.read_csv('db.csv')
+        db = self.db.iloc[:, 1:]
+        db_g = self.db.groupby('subject_id')
+
+        db_facial_id = pd.DataFrame(columns=['subject_id', 'facial_id'])
+        for subject_id in db_g.groups.keys():
+            if subject_id == -1:
+                continue
+            
+            # Get face images of a subject id.
+            df = db_g.get_group(subject_id)
+            images = []
+            
+            for ff in list(df.iloc[:, 1]):
+                image = cv.imread(os.path.join(self.raw_data_path, 'subject_faces', ff))
+                images.append(image)
+            
+            images = np.asarray(images)
+            
+            # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
+            facial_ids = self.fid_extractor.predict(images)
+            facial_id = np.asarray(pd.DataFrame(facial_ids).mean())
+            
+            db_facial_id = pd.concat([db_facial_id, pd.DataFrame({'subject_id': [subject_id]
+                                                                  , 'facial_id': [facial_id]})])
+        
+        # Save db.
+        db_facial_id.index = db_facial_id.subject_id
+        db_facial_id = db_facial_id.to_dict()['facial_id']
+        
+        with open('db_facial_id.pobj', 'wb') as f:
+            pickle.dump(f, db_facial_id)
+        
     def test(self, test_path, output_file_path):
         """Test.
         
@@ -493,8 +576,19 @@ class FaceReIdentifier(object):
             Output file path.
         """        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
-                
-        # Detect faces and save results.
+        with open('db_facial_id.pobj', 'rb') as f:
+            db_facial_id = pickle.load(f)
+        
+        # Get registered facial id data.
+        subject_ids = list(db_facial_id.keys())
+        facial_ids = []
+        
+        for subject_id in subject_ids:
+            facial_ids.append(db_facial_id[subject_id])
+            
+        reg_facial_ids = np.asarray(facial_ids)
+        
+        # Detect faces, identify faces and save results.
         with open(output_file_path, 'w') as f:
             for file_name in file_names:
                 if DEBUG: print(file_name)
@@ -569,7 +663,64 @@ class FaceReIdentifier(object):
                     if count > 60:
                         break
                     
-                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    # Search for id from registered facial ids.
+                    # Crop a face region.
+                    l, t, r, b = int(box.xmin), int(box.ymin), int(box.xmax), int(box.ymax)
+                    image = image_o[(t - 1):(b - 1), (l - 1):(r - 1), :]
+                    
+                    # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                    w = image.shape[1]
+                    h = image.shape[0]
+                    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                    
+                    if w >= h:
+                        w_p = self.hps['image_size']
+                        h_p = int(h / w * self.hps['image_size'])
+                        pad = self.hps['image_size'] - h_p
+                        
+                        if pad % 2 == 0:
+                            pad_t = pad // 2
+                            pad_b = pad // 2
+                        else:
+                            pad_t = pad // 2
+                            pad_b = pad // 2 + 1
+                         
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                    else:
+                        h_p = self.hps['image_size']
+                        w_p = int(w / h * self.hps['image_size'])
+                        pad = self.hps['image_size'] - w_p
+                        
+                        if pad % 2 == 0:
+                            pad_l = pad // 2
+                            pad_r = pad // 2
+                        else:
+                            pad_l = pad // 2
+                            pad_r = pad // 2 + 1                
+                        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                      
+                    
+                    # Create anchor facial ids.
+                    anchor_facial_id = self.fid_extractor(image[np.newaxis, ...])
+                    anchor_facial_id = np.squeeze(anchor_facial_id)
+                    anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
+                    
+                    # Calculate consistency probabilities for each registered face ids.
+                    cons_probs = self.face_identifier.predict([anchor_facial_ids, reg_facial_ids])
+                    cons_probs = np.squeeze(cons_probs)
+                    
+                    # Calculate consistency probabilities' Shannon entropy.
+                    e = entropy(cons_probs)
+                    
+                    # Check whether an anchor facial id is a registered facial id.
+                    if e > self.hps['entropy_th']:
+                        continue
+                    
+                    subject_id = subject_ids[np.argmax(cons_probs)]    
+                    
+                    f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 
@@ -577,12 +728,12 @@ class FaceReIdentifier(object):
                 if len(boxes) == 0:
                     continue
 
-                # draw bounding boxes on the image using labels.
-#                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
+                # Draw bounding boxes on the image using labels.
+                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
          
-                # write the image with bounding boxes to file.
-#                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
-#                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))"
+                # Write the image with bounding boxes to file.
+                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
+                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))
         
     def identify(self, images_a, images_c):
         """Identify faces.
