@@ -136,25 +136,10 @@ class FaceReIdentifier(object):
             self.db = self.db.iloc[:, 1:]
             self.t_indexes = np.asarray(self.db.index)
             self.db_g = self.db.groupby('subject_id')
-            self.df_non_id = self.db_g.get_groups(-1)
-            self.ex_indexes = np.asarray(self.df_non_id.index)
-            
             self.img_pairs = []
+            valid_indexes = self.t_indexes
             
-            valid_indexes = []
-            for v in self.t_indexes:
-                if (self.ex_indexes == v).any():
-                    valid_indexes.append(False)
-                else:
-                    valid_indexes.append(True)
-            
-            valid_indexes = np.asarray(valid_indexes)
-            valid_indexes = self.t_indexes[valid_indexes]
-            
-            for i in self.db_g.groups.keys():
-                if i == -1:
-                    continue
-                
+            for i in self.db_g.groups.keys():                
                 df = self.db_g.get_group(i)
                 ex_indexes2 = np.asarray(df.index)
                 
@@ -231,8 +216,8 @@ class FaceReIdentifier(object):
         else:
             # Design the face re-identification model.
             # Inputs.
-            input_a = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input_a')
-            input_c = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input_c')
+            input_a = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_a')
+            input_c = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_c')
 
             # Load yolov3 as the base model.
             base = self.YOLOV3Base 
@@ -251,7 +236,7 @@ class FaceReIdentifier(object):
                 xc = Dense(self.hps['dense1'], activation='linear', name='dense1_comp_' + str(i))(xc)           
             
             # Calculate the difference of both face features and judge a same person.
-            xd = Lambda(lambda x: K.sqrt(K.sum(K.pow(x[0] - x[1], 2.))), name='lambda1')([xa, xc]) #?
+            xd = Lambda(lambda x: K.pow(x[0] - x[1], 2.)/(x[0] - x[1]), name='lambda1')([xa, xc]) #?
             
             for i in range(self.hps['num_dense2_layers']):
                 xd = Dense(self.hps['dense2'], activation='relu', name='dense2_' + str(i))(xd)
@@ -274,12 +259,16 @@ class FaceReIdentifier(object):
 
         # Create face detector.
         self.fd = FaceDetector(self.raw_data_path, self.hps, True)
+        
+        # Make fid extractor and face indentifier.
+        self._make_fid_extractor()
+        self._make_face_identifier()
 
     def _make_fid_extractor(self):
         """Make facial id extractor."""
         # Design the face re-identification model.
         # Inputs.
-        input = Input(shape=(self.hps['image_size', self.hps['image_size'], 3]), name='input')
+        input = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input')
 
         # Load yolov3 as the base model.
         base = self.YOLOV3Base 
@@ -296,17 +285,17 @@ class FaceReIdentifier(object):
     
     def _make_face_identifier(self):
         """Make face identifier."""
-        facial_id_a = Input(shape=(self.hps['dense1'], 1)) # Dimension?
-        facial_id_c = Input(shape=(self.hps['dense1'], 1)) # Dimension?
+        facial_id_a = Input(shape=(self.hps['dense1'],))
+        facial_id_c = Input(shape=(self.hps['dense1'],))
         
         # Calculate the difference of both face features and judge a same person.
-        xd = self.model.get_layer('lambda1')([facial_id_a, facial_id_c]) #?
+        xd = self.model.get_layer('lambda1')([facial_id_a, facial_id_c])
         
         for i in range(self.hps['num_dense2_layers']):
             xd = self.model.get_layer('dense2_' + str(i))(xd)
         
         output = self.model.get_layer('output')(xd)
-        self.face_identifier(inputs=[facial_id_a, facial_id_a], outputs=[output])
+        self.face_identifier = Model(inputs=[facial_id_a, facial_id_c], outputs=[output])
 
     @property
     def YOLOV3Base(self):
@@ -786,7 +775,11 @@ def main(args):
         raw_data_path = args.raw_data_path
       
         # hps.
-        hps['image_size'] = int(args.image_size)    
+        hps['image_size'] = int(args.image_size)
+        hps['num_dense1_layers'] = int(args.num_dense1_layers)
+        hps['dense1'] = int(args.dense1)
+        hps['num_dense2_layers'] = int(args.num_dense2_layers)
+        hps['dense2'] = int(args.dense2)    
         hps['lr'] = float(args.lr)
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
@@ -804,6 +797,7 @@ def main(args):
         
         ts = time.time()
         fr.train()
+        fr.register_facial_ids()
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
@@ -813,7 +807,11 @@ def main(args):
         output_file_path = args.output_file_path
       
         # hps.
-        hps['image_size'] = int(args.image_size) 
+        hps['image_size'] = int(args.image_size)
+        hps['num_dense1_layers'] = int(args.num_dense1_layers)
+        hps['dense1'] = int(args.dense1)
+        hps['num_dense2_layers'] = int(args.num_dense2_layers)
+        hps['dense2'] = int(args.dense2)  
         hps['lr'] = float(args.lr)
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
@@ -823,6 +821,7 @@ def main(args):
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
         hps['num_cands'] = int(args.num_cands)
+        hps['entropy_th'] = float(args.entropy_th)
         
         model_loading = False if int(args.model_loading) == 0 else True        
         
@@ -844,6 +843,10 @@ if __name__ == '__main__':
     parser.add_argument('--raw_data_path')
     parser.add_argument('--output_file_path')
     parser.add_argument('--image_size')
+    parser.add_argument('--num_dense1_layers')
+    parser.add_argument('--dense1')
+    parser.add_argument('--num_dense2_layers')
+    parser.add_argument('--dense2')
     parser.add_argument('--lr')
     parser.add_argument('--beta_1')
     parser.add_argument('--beta_2')
@@ -853,6 +856,7 @@ if __name__ == '__main__':
     parser.add_argument('--face_conf_th')
     parser.add_argument('--nms_iou_th')
     parser.add_argument('--num_cands')
+    parser.add_argument('--entropy_th')
     parser.add_argument('--model_loading')
     args = parser.parse_args()
     
