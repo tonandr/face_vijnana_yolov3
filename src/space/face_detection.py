@@ -25,10 +25,15 @@ from keras.utils.data_utils import Sequence
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
 
+#os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+
 # Constants.
 DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
+
+RATIO_TH = 0.8
 
 class FaceDetector(object):
     """Face detector to use yolov3."""
@@ -337,7 +342,8 @@ class FaceDetector(object):
                 image = cv.imread(os.path.join(test_path, file_name))
                 image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
-                
+                image = image/255
+                                    
                 r = image[:, :, 0].copy()
                 g = image[:, :, 1].copy()
                 b = image[:, :, 2].copy()
@@ -396,6 +402,18 @@ class FaceDetector(object):
                         box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
                         box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
                         box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+
+                    # Correct image ratio.
+                    r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
+                    r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
+                    
+                    if r_wh < RATIO_TH:
+                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
+                    elif r_hw < RATIO_TH:
+                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                    
+                    # Scale ?
+                    # TODO
                         
                 count = 1
                 
@@ -467,6 +485,7 @@ class FaceDetector(object):
                 
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
+                image = image/255
                 image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
                 
@@ -516,7 +535,7 @@ class FaceDetector(object):
                 # Detect faces.
                 boxes = self.detect(image, image_o_size)
                 
-                # correct the sizes of the bounding boxes
+                # Correct the sizes of the bounding boxes
                 for box in boxes:
                     if w >= h:
                         box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
@@ -528,7 +547,19 @@ class FaceDetector(object):
                         box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
                         box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
                         box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
-                        
+                    
+                    # Correct image ratio.
+                    r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
+                    r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
+                    
+                    if r_wh < RATIO_TH:
+                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
+                    elif r_hw < RATIO_TH:
+                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                    
+                    # Scale ?
+                    # TODO
+                    
                 count = 1
                 
                 for box in boxes:
@@ -586,6 +617,7 @@ class FaceDetector(object):
                 
                 # Load an image.
                 image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                image = image/255
                                         
                 r = image[:, :, 0].copy()
                 g = image[:, :, 1].copy()

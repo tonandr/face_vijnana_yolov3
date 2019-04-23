@@ -9,6 +9,7 @@ import glob
 import argparse
 import time
 import pickle
+import platform
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ from keras import optimizers
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
 from face_detection import FaceDetector
+from random import shuffle
 
 # Constants.
 DEBUG = True
@@ -108,7 +110,7 @@ def create_db_fri(raw_data_path, hps):
             # Write a face region image.
             face_file_name = file_name[:-4] + '_' + str(k) + '_' \
                 + str(int(df.iloc[i, 3])) + '_' + str(int(df.iloc[i, 4])) + file_name[-4:]
-                                
+                
             print('Save ' + face_file_name)
             imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name), (image).astype('uint8'))           
             
@@ -128,41 +130,62 @@ class FaceReIdentifier(object):
     class TrainingSequence(Sequence):
         """Training data set sequence."""
         
-        def __init__(self, raw_data_path, hps):
-            # Create indexing data of positive and negative cases.
-            self.raw_data_path = raw_data_path
-            self.hps = hps
-            self.db = pd.read_csv('db.csv')
-            self.db = self.db.iloc[:, 1:]
-            self.t_indexes = np.asarray(self.db.index)
-            self.db_g = self.db.groupby('subject_id')
-            self.img_pairs = []
-            valid_indexes = self.t_indexes
-            
-            for i in self.db_g.groups.keys():                
-                df = self.db_g.get_group(i)
-                ex_indexes2 = np.asarray(df.index)
+        def __init__(self, raw_data_path, hps, loadFlag = True):
+            if loadFlag:
+                with open('img_pairs.pickle', 'rb') as f:
+                    self.img_pairs = pickle.load(f)
+                    self.img_pairs = self.img_pairs
+                    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.db = pd.read_csv('db.csv')
+                self.db = self.db.iloc[:, 1:]
                 
-                # Positive sample pair.
-                for k in range(0, ex_indexes2.shape[0] - 1):
-                    for l in range(k + 1, ex_indexes2.shape[0]):
-                        self.img_pairs.append((ex_indexes2[k], ex_indexes2[l], 1.)) 
+                self.steps = self.hps['step_per_epoch']
+                self.batch_size = len(self.img_pairs) // self.steps
+            else:    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.db = pd.read_csv('db.csv')
+                self.db = self.db.iloc[:, 1:]
+                self.t_indexes = np.asarray(self.db.index)
+                self.db_g = self.db.groupby('subject_id')
                 
-                # Negative sample pair.
-                ex_inv_idxes = []
-                for v in ex_indexes2:
-                    if (valid_indexes == v).any():
-                        ex_inv_idxes.append(False)
-                    else:
-                        ex_inv_idxes.append(True)
-                ex_inv_idxes = np.asarray(ex_inv_idxes)
-                valid_indexes2 = valid_indexes[ex_inv_idxes]                
+                self.img_pairs = []
+                valid_indexes = self.t_indexes
                 
-                for j in ex_indexes2:
-                    self.img_pairs.append((j, np.random.choice(valid_indexes2, size=1)[0], 0.))
-            
-            self.steps = self.hps['step_per_epoch']
-            self.batch_size = len(self.img_pairs) // self.steps
+                for i in self.db_g.groups.keys():                
+                    df = self.db_g.get_group(i)
+                    ex_indexes2 = np.asarray(df.index)
+                    
+                    # Positive sample pair.
+                    for k in range(0, ex_indexes2.shape[0] - 1):
+                        for l in range(k + 1, ex_indexes2.shape[0]):
+                            self.img_pairs.append((ex_indexes2[k], ex_indexes2[l], 1.)) 
+                    
+                    # Negative sample pair.
+                    ex_inv_idxes = []
+                    for v in valid_indexes: 
+                        if (ex_indexes2 == v).any():
+                            ex_inv_idxes.append(False)
+                        else:
+                            ex_inv_idxes.append(True)
+                    ex_inv_idxes = np.asarray(ex_inv_idxes)
+                    valid_indexes2 = valid_indexes[ex_inv_idxes]                
+                    
+                    for j in ex_indexes2:
+                        self.img_pairs.append((j, np.random.choice(valid_indexes2, size=1)[0], 0.))
+                
+                self.steps = self.hps['step_per_epoch']
+                self.batch_size = len(self.img_pairs) // self.steps
+                
+                # Shuffle image pairs.
+                self.img_pairs = shuffle(self.img_pairs)
+                
+                with open('img_pairs.pickle', 'wb') as f:
+                    pickle.dump(self.img_pairs, f)
                 
         def __len__(self):
             return self.steps
@@ -184,11 +207,11 @@ class FaceReIdentifier(object):
                                                  , 'subject_faces'
                                                  , self.db.loc[self.img_pairs[bi][1], 'face_file']))
                 
-                images_a.append(image_a)
-                images_c.append(image_c)
+                images_a.append(image_a/255)
+                images_c.append(image_c/255)
                     
                 # Create a ground truth.
-                gt_tensor = np.asarray([self.img_pair[bi, 2]])
+                gt_tensor = np.asarray([self.img_pairs[bi][2]])
                 
                 gt_tensors.append(gt_tensor)
                                                                          
@@ -210,7 +233,7 @@ class FaceReIdentifier(object):
         self.raw_data_path = raw_data_path
         self.hps = hps
         self.model_loading = model_loading
-        
+
         if model_loading: 
             self.model = load_model(os.path.join(self.MODEL_PATH))
         else:
@@ -515,15 +538,15 @@ class FaceReIdentifier(object):
                       , steps_per_epoch=self.hps['step_per_epoch']                  
                       , epochs=self.hps['epochs']
                       , verbose=1
-                      , max_queue_size=10
-                      , workers=1
-                      , use_multiprocessing=False)
+                      , max_queue_size=1000
+                      , workers=4
+                      , use_multiprocessing=True)
     
     def register_facial_ids(self):
         """Register facial ids."""
         db = pd.read_csv('db.csv')
-        db = self.db.iloc[:, 1:]
-        db_g = self.db.groupby('subject_id')
+        db = db.iloc[:, 1:]
+        db_g = db.groupby('subject_id')
 
         db_facial_id = pd.DataFrame(columns=['subject_id', 'facial_id'])
         for subject_id in db_g.groups.keys():
@@ -536,7 +559,7 @@ class FaceReIdentifier(object):
             
             for ff in list(df.iloc[:, 1]):
                 image = cv.imread(os.path.join(self.raw_data_path, 'subject_faces', ff))
-                images.append(image)
+                images.append(image/255)
             
             images = np.asarray(images)
             
@@ -585,7 +608,8 @@ class FaceReIdentifier(object):
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
                 image_o_size = (image.shape[0], image.shape[1])
-                image_o = image.copy() 
+                image_o = image.copy()
+                image = image/255
                 
                 r = image[:, :, 0].copy()
                 g = image[:, :, 1].copy()
@@ -721,8 +745,16 @@ class FaceReIdentifier(object):
                 image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
          
                 # Write the image with bounding boxes to file.
-                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
-                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))
+                # Draw bounding boxes of ground truth.
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                else:
+                    file_new_name = file_name.split('/')[-1]
+                    
+                file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8')) 
         
     def identify(self, images_a, images_c):
         """Identify faces.
