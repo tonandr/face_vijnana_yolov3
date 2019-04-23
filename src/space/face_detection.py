@@ -8,6 +8,7 @@ import os
 import glob
 import argparse
 import time
+import platform
 
 import numpy as np
 import pandas as pd
@@ -326,10 +327,10 @@ class FaceDetector(object):
         gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
-                
+        ratios = []        
         # Detect faces and save results.
         with open(output_file_path, 'w') as f:
-            for file_name in file_names:                
+            for file_name in file_names:          
                 if DEBUG: print(file_name)
                 
                 # Load an image.
@@ -411,7 +412,12 @@ class FaceDetector(object):
                     continue
 
                 # Draw bounding boxes of ground truth.
-                df = gt_df_g.get_group(file_name)
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                else:
+                    file_new_name = file_name.split('/')[-1]
+                
+                df = gt_df_g.get_group(file_new_name)
                 gt_boxes = []
                 
                 for i in range(df.shape[0]):
@@ -424,8 +430,9 @@ class FaceDetector(object):
                     xmax = int(xmin + df.iloc[i, 5] - 1)
                     ymin = int(df.iloc[i, 4])
                     ymax = int(ymin + df.iloc[i, 6] - 1)                    
-                    gt_box = BoundBox(xmin, xmax, ymin, ymax, objness=1., classes=[1.0])
+                    gt_box = BoundBox(xmin, ymin, xmax, ymax, objness=1., classes=[1.0])
                     gt_boxes.append(gt_box)
+                    ratios.append((xmax - xmin) / (ymax - ymin))
                     
                 image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th']) 
                 
@@ -433,8 +440,13 @@ class FaceDetector(object):
                 image = draw_boxes_v2(image, boxes, self.hps['face_conf_th']) 
          
                 # Write the image with bounding boxes to file.
-                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
-                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))                
+                file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))                
+        
+        ratios = pd.DataFrame({'ratio': ratios})
+        ratios.to_csv('ratios.csv')
         
     def test(self, test_path, output_file_path):
         """Test.
@@ -531,12 +543,15 @@ class FaceDetector(object):
                 if len(boxes) == 0:
                     continue
 
-                # draw bounding boxes on the image using labels.
-#                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
-         
-                # write the image with bounding boxes to file.
-#                print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
-#                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))
+                # Write the image with bounding boxes to file.
+                '''
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                    file_new_name = file_name[:-4] + '_detected' + file_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+                '''
     
     class TrainingSequence(Sequence):
         """Training data set sequence."""
@@ -1038,7 +1053,6 @@ def main(args):
         
         model_loading = False if int(args.model_loading) == 0 else True        
         
-
         fd = FaceDetector(raw_data_path, hps, True)
         
         ts = time.time()
