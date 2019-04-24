@@ -1,6 +1,6 @@
-# Docker application of face_detection.py.
+# Docker application of face re-identification.
 # AUthor: Inwoo Chung (gutomitai@gmail.com)
-# From Apr 15, 2019.
+# From Apr 24, 2019.
 FROM tensorflow/tensorflow:latest-gpu-py3
 WORKDIR /usr/src/app
 COPY . .

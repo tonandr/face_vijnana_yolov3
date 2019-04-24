@@ -10,6 +10,7 @@ import argparse
 import time
 import pickle
 import platform
+import random
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,7 @@ from random import shuffle
 DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
+YOLO3_BASE_MODEL_LOAD_FLAG = True
 
 def create_db_fri(raw_data_path, hps):
     """Create db for face re-identifier."""
@@ -130,8 +132,8 @@ class FaceReIdentifier(object):
     class TrainingSequence(Sequence):
         """Training data set sequence."""
         
-        def __init__(self, raw_data_path, hps, loadFlag = True):
-            if loadFlag:
+        def __init__(self, raw_data_path, hps, load_flag = True):
+            if load_flag:
                 with open('img_pairs.pickle', 'rb') as f:
                     self.img_pairs = pickle.load(f)
                     self.img_pairs = self.img_pairs
@@ -182,7 +184,7 @@ class FaceReIdentifier(object):
                 self.batch_size = len(self.img_pairs) // self.steps
                 
                 # Shuffle image pairs.
-                self.img_pairs = shuffle(self.img_pairs)
+                shuffle(self.img_pairs)
                 
                 with open('img_pairs.pickle', 'wb') as f:
                     pickle.dump(self.img_pairs, f)
@@ -233,7 +235,8 @@ class FaceReIdentifier(object):
         self.raw_data_path = raw_data_path
         self.hps = hps
         self.model_loading = model_loading
-
+        #trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
+        
         if model_loading: 
             self.model = load_model(os.path.join(self.MODEL_PATH))
         else:
@@ -292,10 +295,10 @@ class FaceReIdentifier(object):
         # Design the face re-identification model.
         # Inputs.
         input = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input')
-
+ 
         # Load yolov3 as the base model.
         base = self.YOLOV3Base 
-        
+                
         # Get facial id.
         x = base(input) # Non-linear.
         x = Flatten()(x)
@@ -329,6 +332,12 @@ class FaceReIdentifier(object):
         Model of Keras
             Partial yolo3 model from the input layer to the add_23 layer
         """
+        
+        if YOLO3_BASE_MODEL_LOAD_FLAG:
+            base = load_model('yolov3_base.hd5')
+            base.trainable = False
+            return base
+        
         yolov3 = make_yolov3_model()
 
         # Load the weights.
@@ -528,19 +537,25 @@ class FaceReIdentifier(object):
         
         output = x
         base = Model(inputs=[input], outputs=[output])
+        base.trainable = False
+        base.save('yolov3_base.hd5')
+        
         return base
         
     def train(self):
         """Train face detector."""
-        trGen = self.TrainingSequence(self.raw_data_path, self.hps)
+        trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=True)
             
         self.model.fit_generator(trGen
                       , steps_per_epoch=self.hps['step_per_epoch']                  
                       , epochs=self.hps['epochs']
                       , verbose=1
-                      , max_queue_size=1000
+                      , max_queue_size=100
                       , workers=4
                       , use_multiprocessing=True)
+
+        print('Save the model.')            
+        self.model.save(self.MODEL_PATH)
     
     def register_facial_ids(self):
         """Register facial ids."""
@@ -575,10 +590,10 @@ class FaceReIdentifier(object):
         db_facial_id = db_facial_id.to_dict()['facial_id']
         
         with open('db_facial_id.pobj', 'wb') as f:
-            pickle.dump(f, db_facial_id)
-        
-    def test(self, test_path, output_file_path):
-        """Test.
+            pickle.dump(db_facial_id, f)
+
+    def evaluate(self, test_path, output_file_path):
+        """Evaluate.
         
         Parameters
         ----------
@@ -601,9 +616,13 @@ class FaceReIdentifier(object):
         reg_facial_ids = np.asarray(facial_ids)
         
         # Detect faces, identify faces and save results.
+        es = []
+        count = 1
+        
         with open(output_file_path, 'w') as f:
             for file_name in file_names:
-                if DEBUG: print(file_name)
+                if DEBUG: print(count, '/', len(file_names), file_name)
+                count += 1
                 
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
@@ -716,7 +735,7 @@ class FaceReIdentifier(object):
                         image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                      
                     
                     # Create anchor facial ids.
-                    anchor_facial_id = self.fid_extractor(image[np.newaxis, ...])
+                    anchor_facial_id = self.fid_extractor.predict(image[np.newaxis, ...])
                     anchor_facial_id = np.squeeze(anchor_facial_id)
                     anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
                     
@@ -726,6 +745,7 @@ class FaceReIdentifier(object):
                     
                     # Calculate consistency probabilities' Shannon entropy.
                     e = entropy(cons_probs)
+                    es.append(e)
                     
                     # Check whether an anchor facial id is a registered facial id.
                     if e > self.hps['entropy_th']:
@@ -754,8 +774,198 @@ class FaceReIdentifier(object):
                 file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
                 
                 print(file_new_name)
-                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8')) 
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+
+        es_df = pd.DataFrame(es) #?
+        es_df.to_csv('es.csv')
         
+    def test(self, test_path, output_file_path):
+        """Test.
+        
+        Parameters
+        ----------
+        test_path : string
+            Testing directory.
+        output_file_path : string
+            Output file path.
+        """        
+        file_names = glob.glob(os.path.join(test_path, '*.jpg'))
+        with open('db_facial_id.pobj', 'rb') as f:
+            db_facial_id = pickle.load(f)
+        
+        # Get registered facial id data.
+        subject_ids = list(db_facial_id.keys())
+        facial_ids = []
+        
+        for subject_id in subject_ids:
+            facial_ids.append(db_facial_id[subject_id])
+            
+        reg_facial_ids = np.asarray(facial_ids)
+        
+        # Detect faces, identify faces and save results.
+        es = []
+        count = 1
+        with open(output_file_path, 'w') as f:
+            for file_name in file_names:
+                if DEBUG: print(count, '/', len(file_names), file_name)
+                count += 1
+                
+                # Load an image.
+                image = cv.imread(os.path.join(test_path, file_name))
+                image_o_size = (image.shape[0], image.shape[1])
+                image_o = image.copy()
+                image = image/255
+                
+                r = image[:, :, 0].copy()
+                g = image[:, :, 1].copy()
+                b = image[:, :, 2].copy()
+                image[:, :, 0] = b
+                image[:, :, 1] = g
+                image[:, :, 2] = r 
+             
+                # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                w = image.shape[1]
+                h = image.shape[0]
+                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                
+                if w >= h:
+                    w_p = self.hps['image_size']
+                    h_p = int(h / w * self.hps['image_size'])
+                    pad = self.hps['image_size'] - h_p
+                    
+                    if pad % 2 == 0:
+                        pad_t = pad // 2
+                        pad_b = pad // 2
+                    else:
+                        pad_t = pad // 2
+                        pad_b = pad // 2 + 1
+    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                else:
+                    h_p = self.hps['image_size']
+                    w_p = int(w / h * self.hps['image_size'])
+                    pad = self.hps['image_size'] - w_p
+                    
+                    if pad % 2 == 0:
+                        pad_l = pad // 2
+                        pad_r = pad // 2
+                    else:
+                        pad_l = pad // 2
+                        pad_r = pad // 2 + 1                
+                    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+       
+                image = image[np.newaxis, :]
+                       
+                # Detect faces.
+                boxes = self.fd.detect(image, image_o_size)
+                
+                # correct the sizes of the bounding boxes
+                for box in boxes:
+                    if w >= h:
+                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                    else:
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                        
+                count = 1
+                
+                for box in boxes:
+                    if count > 60:
+                        break
+                    
+                    # Search for id from registered facial ids.
+                    # Crop a face region.
+                    l, t, r, b = int(box.xmin), int(box.ymin), int(box.xmax), int(box.ymax)
+                    image = image_o[(t - 1):(b - 1), (l - 1):(r - 1), :]
+                    
+                    # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                    w = image.shape[1]
+                    h = image.shape[0]
+                    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                    
+                    if w >= h:
+                        w_p = self.hps['image_size']
+                        h_p = int(h / w * self.hps['image_size'])
+                        pad = self.hps['image_size'] - h_p
+                        
+                        if pad % 2 == 0:
+                            pad_t = pad // 2
+                            pad_b = pad // 2
+                        else:
+                            pad_t = pad // 2
+                            pad_b = pad // 2 + 1
+                         
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                    else:
+                        h_p = self.hps['image_size']
+                        w_p = int(w / h * self.hps['image_size'])
+                        pad = self.hps['image_size'] - w_p
+                        
+                        if pad % 2 == 0:
+                            pad_l = pad // 2
+                            pad_r = pad // 2
+                        else:
+                            pad_l = pad // 2
+                            pad_r = pad // 2 + 1                
+                        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                      
+                    
+                    # Create anchor facial ids.
+                    anchor_facial_id = self.fid_extractor.predict(image[np.newaxis, ...])
+                    anchor_facial_id = np.squeeze(anchor_facial_id)
+                    anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
+                    
+                    # Calculate consistency probabilities for each registered face ids.
+                    cons_probs = self.face_identifier.predict([anchor_facial_ids, reg_facial_ids])
+                    cons_probs = np.squeeze(cons_probs)
+                    
+                    # Calculate consistency probabilities' Shannon entropy.
+                    e = entropy(cons_probs)
+                    es.append(e)
+                    
+                    # Check whether an anchor facial id is a registered facial id.
+                    if e > self.hps['entropy_th']:
+                        continue
+                    
+                    subject_id = subject_ids[np.argmax(cons_probs)]    
+                    
+                    f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
+                    count +=1
+
+                # Check exception.
+                if len(boxes) == 0:
+                    continue
+
+                '''
+                # Draw bounding boxes on the image using labels.
+                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
+         
+                # Write the image with bounding boxes to file.
+                # Draw bounding boxes of ground truth.
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                else:
+                    file_new_name = file_name.split('/')[-1]
+                    
+                file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+                '''
+        es_df = pd.DataFrame(es) #?
+        es_df.to_csv('es.csv')
+                
     def identify(self, images_a, images_c):
         """Identify faces.
         

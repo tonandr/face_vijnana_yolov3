@@ -32,6 +32,7 @@ from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, 
 DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
+YOLO3_BASE_MODEL_LOAD_FLAG = False
 
 RATIO_TH = 0.8
 
@@ -101,6 +102,10 @@ class FaceDetector(object):
         Model of Keras
             Partial yolo3 model from the input layer to the add_23 layer
         """
+        if YOLO3_BASE_MODEL_LOAD_FLAG:
+            base = load_model('yolov3_base.hd5')
+            return base
+
         yolov3 = make_yolov3_model()
 
         # Load the weights.
@@ -300,6 +305,8 @@ class FaceDetector(object):
         
         output = x
         base = Model(inputs=[input], outputs=[output])
+        base.save('yolov3_base.hd5')
+        
         return base
 
     def train(self):
@@ -334,9 +341,11 @@ class FaceDetector(object):
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
         ratios = []        
         # Detect faces and save results.
+        count = 1
         with open(output_file_path, 'w') as f:
             for file_name in file_names:          
-                if DEBUG: print(file_name)
+                if DEBUG: print(count, '/', len(file_names), file_name)
+                count += 1
                 
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
@@ -479,9 +488,11 @@ class FaceDetector(object):
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
                 
         # Detect faces and save results.
+        count = 1
         with open(output_file_path, 'w') as f:
             for file_name in file_names:
-                if DEBUG: print(file_name)
+                if DEBUG: print(count, '/', len(file_names), file_name)
+                count += 1
                 
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
