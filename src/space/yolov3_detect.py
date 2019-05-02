@@ -132,7 +132,7 @@ class WeightReader:
         self.offset = 0
 
 class BoundBox:
-    def __init__(self, xmin, ymin, xmax, ymax, objness = None, classes = None, anchor = None):
+    def __init__(self, xmin, ymin, xmax, ymax, objness = None, classes = None, anchor = None, subject_id = None):
         self.xmin = xmin
         self.ymin = ymin
         self.xmax = xmax
@@ -141,6 +141,7 @@ class BoundBox:
         self.objness = objness
         self.classes = classes
         self.anchor = anchor
+        self.subject_id = subject_id
 
         self.label = -1
         self.score = -1
@@ -520,7 +521,7 @@ def draw_boxes_v2(rawImage, boxes, cls_thresh):
     
     return image
 
-def draw_boxes_v3(rawImage, boxes, cls_thresh):
+def draw_boxes_v3(rawImage, boxes, cls_thresh, color=(0, 255, 0)):
     image = copy.copy(rawImage)
     
     for box in boxes:        
@@ -529,10 +530,11 @@ def draw_boxes_v3(rawImage, boxes, cls_thresh):
         image = copy.copy(image)
         rr, cc = polygon_perimeter((box.ymin, box.ymin, box.ymax, box.ymax) 
                                               , (box.xmin, box.xmax, box.xmax, box.xmin), shape = image.shape)
-        set_color(image, (rr, cc), (255,0,0))
+        set_color(image, (rr, cc), color)
         imageObject = Image.fromarray(image, mode='RGB')
         imageDraw = ImageDraw.Draw(imageObject)
-        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), (255, 0, 0))
+        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) \
+                       + ', ' + str(box.classes[0]) + ', ' + str(box.subject_id), color)
         image = np.asarray(imageObject)
     
     return image 

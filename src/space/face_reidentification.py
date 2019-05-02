@@ -10,24 +10,23 @@ import argparse
 import time
 import pickle
 import platform
-import random
 
 import numpy as np
 import pandas as pd
 import cv2 as cv
-from skimage.io import imread, imsave
+from skimage.io import imsave
 from scipy.stats import entropy
 from scipy.linalg import norm
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU, Flatten
-from keras.layers.merge import add, Concatenate
+from keras.layers import Input, Dense, Lambda, ZeroPadding2D, LeakyReLU, Flatten
+from keras.layers.merge import add
 from keras.utils import multi_gpu_model
 from keras.utils.data_utils import Sequence
 import keras.backend as K
 from keras import optimizers
 
-from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
+from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
 from face_detection import FaceDetector
 from random import shuffle
 
@@ -36,11 +35,6 @@ DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
 YOLO3_BASE_MODEL_LOAD_FLAG = True
-
-def triplet_loss(y_true, y_pred):
-    # Calculate the difference of both face features and judge a same person.
-    x = y_pred
-    return K.maximum(K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 64:128], 2.0))) - K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 128:192], 2.0))) + 0.2, 0.)
                          
 def create_db_fri(raw_data_path, hps):
     """Create db for face re-identifier."""
@@ -140,9 +134,9 @@ class FaceReIdentifier(object):
         
         def __init__(self, raw_data_path, hps, load_flag = True):
             if load_flag:
-                with open('img_triplet_pairs.pickle', 'rb') as f:
-                    self.img_triplet_pairs = pickle.load(f)
-                    self.img_triplet_pairs = self.img_triplet_pairs
+                with open('img_pairs.pickle', 'rb') as f:
+                    self.img_pairs = pickle.load(f)
+                    self.img_pairs = self.img_pairs
                     
                 # Create indexing data of positive and negative cases.
                 self.raw_data_path = raw_data_path
@@ -151,7 +145,7 @@ class FaceReIdentifier(object):
                 self.db = self.db.iloc[:, 1:]
                 
                 self.steps = self.hps['step_per_epoch']
-                self.batch_size = len(self.img_triplet_pairs) // self.steps
+                self.batch_size = len(self.img_pairs) // self.steps
             else:    
                 # Create indexing data of positive and negative cases.
                 self.raw_data_path = raw_data_path
@@ -161,13 +155,19 @@ class FaceReIdentifier(object):
                 self.t_indexes = np.asarray(self.db.index)
                 self.db_g = self.db.groupby('subject_id')
                 
-                self.img_triplet_pairs = []
+                self.img_pairs = []
                 valid_indexes = self.t_indexes
                 
                 for i in self.db_g.groups.keys():                
                     df = self.db_g.get_group(i)
                     ex_indexes2 = np.asarray(df.index)
-                    
+                
+                    # Positive sample pair.
+                    for k in range(0, ex_indexes2.shape[0] - 1):
+                        for l in range(k + 1, ex_indexes2.shape[0]):
+                            self.img_pairs.append((ex_indexes2[k], ex_indexes2[l], 1.)) 
+                
+                    # Negative sample pair.
                     ex_inv_idxes = []
                     for v in valid_indexes: 
                         if (ex_indexes2 == v).any():
@@ -175,23 +175,19 @@ class FaceReIdentifier(object):
                         else:
                             ex_inv_idxes.append(True)
                     ex_inv_idxes = np.asarray(ex_inv_idxes)
-                    valid_indexes2 = valid_indexes[ex_inv_idxes]   
-                    
-                    # Triplet sample pair.
-                    for k in range(0, ex_indexes2.shape[0] - 1):
-                        for l in range(k + 1, ex_indexes2.shape[0]):
-                            self.img_triplet_pairs.append((ex_indexes2[k]
-                                                   , ex_indexes2[l]
-                                                   , np.random.choice(valid_indexes2, size=1)[0])) 
+                    valid_indexes2 = valid_indexes[ex_inv_idxes]                
+                
+                    for j in ex_indexes2:
+                        self.img_pairs.append((j, np.random.choice(valid_indexes2, size=1)[0], 0.))
                 
                 self.steps = self.hps['step_per_epoch']
-                self.batch_size = len(self.img_triplet_pairs) // self.steps
+                self.batch_size = len(self.img_pairs) // self.steps
                 
                 # Shuffle image pairs.
-                shuffle(self.img_triplet_pairs)
+                shuffle(self.img_pairs)
                 
-                with open('img_triplet_pairs.pickle', 'wb') as f:
-                    pickle.dump(self.img_triplet_pairs, f)
+                with open('img_pairs.pickle', 'wb') as f:
+                    pickle.dump(self.img_pairs, f)
                 
         def __len__(self):
             return self.steps
@@ -201,29 +197,28 @@ class FaceReIdentifier(object):
             # TODO
             
             images_a = []
-            images_p = []
-            images_n = []
+            images_c = []
+            gt_tensors = []
             
             for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
                 # Get the anchor and comparison images.
                 image_a = cv.imread(os.path.join(self.raw_data_path
                                                  , 'subject_faces'
-                                                 , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
-                image_p = cv.imread(os.path.join(self.raw_data_path
+                                                 , self.db.loc[self.img_pairs[bi][0], 'face_file']))
+                image_c = cv.imread(os.path.join(self.raw_data_path
                                                  , 'subject_faces'
-                                                 , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
-                image_n = cv.imread(os.path.join(self.raw_data_path
-                                                 , 'subject_faces'
-                                                 , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                                                 , self.db.loc[self.img_pairs[bi][1], 'face_file']))
                 
-                images_a.append(image_a/255)
-                images_p.append(image_p/255)
-                images_n.append(image_n/255)
-                                                                                             
-            return ({'input_a': np.asarray(images_a)
-                     , 'input_p': np.asarray(images_p)
-                     , 'input_n': np.asarray(images_n)}
-                     , {'output': np.zeros(shape=(len(images_a), 192))}) 
+                images_a.append(image_a)
+                images_c.append(image_c)
+                    
+                # Create a ground truth.
+                gt_tensor = np.asarray([self.img_pairs[bi][2]])
+                
+                gt_tensors.append(gt_tensor)
+                                                                         
+            return ({'input_a': np.asarray(images_a), 'input_c': np.asarray(images_c)}
+                    , {'output': np.asarray(gt_tensors)}) 
 
     def __init__(self, raw_data_path, hps, model_loading):
         """
@@ -243,65 +238,51 @@ class FaceReIdentifier(object):
         #trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
         
         if model_loading: 
-            self.model = load_model(os.path.join(self.MODEL_PATH), custom_objects={'triplet_loss': triplet_loss})
+            self.model = load_model(os.path.join(self.MODEL_PATH))
         else:
             # Design the face re-identification model.
             # Inputs.
             input_a = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_a')
-            input_p = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_p')
-            input_n = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_n')
+            input_c = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_c')
 
             # Load yolov3 as the base model.
-            base = self.YOLOV3Base 
+            base = self.YOLOV3Base
+            base.name = 'base' 
             
-            # Get triplet facial ids.
+            # Get both facial ids.
             xa = base(input_a) # Non-linear.
             xa = Flatten()(xa)
+            xc = base(input_c)
+            xc = Flatten()(xc)
             
-            c_dense_layer = Dense(self.hps['dense1'], activation='linear', name='dense1')
-            leaky_relu = LeakyReLU(name='leaky_relu')
-            xa = c_dense_layer(xa)
-            xa = leaky_relu(xa)
-            
-            '''
             for i in range(self.hps['num_dense1_layers']):
-                xa = Dense(self.hps['dense1'], activation='linear', name='dense1_anchor_' + str(i))(xa)
-            '''
+                dense_layer = Dense(self.hps['dense1'], activation='linear', name='dense1_anchor_' + str(i))
+                xa = dense_layer(xa)
+                xa = LeakyReLU()(xa)
+                xc = dense_layer(xc)
+                xc = LeakyReLU()(xc)
+                        
+            # Calculate the difference of both face features and judge a same person.
+            xd = Lambda(lambda x: K.pow(x[0] - x[1], 2.)/(x[0] - x[1]), name='lambda1')([xa, xc]) #?
             
-            xp = base(input_p)
-            xp = Flatten()(xp)
-            xp = c_dense_layer(xp)
-            xp = leaky_relu(xp)
+            for i in range(self.hps['num_dense2_layers']):
+                xd = Dense(self.hps['dense2'], activation='linear', name='dense2_' + str(i))(xd)
+                xd = LeakyReLU()(xd)
             
-            '''
-            for i in range(self.hps['num_dense1_layers']):
-                xp = Dense(self.hps['dense1'], activation='linear', name='dense1_pos_' + str(i))(xp)
-            '''
-
-            xn = base(input_n)
-            xn = Flatten()(xn)
-            xn = c_dense_layer(xn)
-            xn = leaky_relu(xn)
-            
-            '''
-            for i in range(self.hps['num_dense1_layers']):
-                xn = Dense(self.hps['dense1'], activation='linear', name='dense1_neg_' + str(i))(xn)            
-            '''
-            
-            output = Concatenate(name='output')([xa, xp, xn]) #?
+            output = Dense(1, activation='sigmoid', name='output')(xd)
 
             if MULTI_GPU:
-                self.model = multi_gpu_model(Model(inputs=[input_a, input_p, input_n], outputs=[output])
+                self.model = multi_gpu_model(Model(inputs=[input_a, input_c], outputs=[output])
                                                    , gpus = NUM_GPUS)
             else:
-                self.model = Model(inputs=[input_a, input_p, input_n], outputs=[output])
+                self.model = Model(inputs=[input_a, input_c], outputs=[output])
 
             opt = optimizers.Adam(lr=self.hps['lr']
                                     , beta_1=self.hps['beta_1']
                                     , beta_2=self.hps['beta_2']
                                     , decay=self.hps['decay'])
             
-            self.model.compile(optimizer=opt, loss=triplet_loss)
+            self.model.compile(optimizer=opt, loss='binary_crossentropy')
             self.model.summary()
 
         # Create face detector.
@@ -309,31 +290,43 @@ class FaceReIdentifier(object):
         
         # Make fid extractor and face indentifier.
         self._make_fid_extractor()
+        self._make_face_identifier()
 
     def _make_fid_extractor(self):
         """Make facial id extractor."""
         # Design the face re-identification model.
         # Inputs.
-        input = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input')
+        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input')
  
         # Load yolov3 as the base model.
-        base = self.YOLOV3Base 
+        base = self.model.get_layer('base')
                 
         # Get facial id.
-        x = base(input) # Non-linear.
+        x = base(input1) # Non-linear.
         x = Flatten()(x)
         
-        '''
         for i in range(self.hps['num_dense1_layers']):
             x = self.model.get_layer('dense1_anchor_' + str(i))(x)
-        '''
-        
-        x = self.model.get_layer('dense1')(x)
-        x = self.model.get_layer('leaky_relu')(x)
+            x = LeakyReLU()(x)
         
         facial_id = x
-        self.fid_extractor = Model(inputs=[input], outputs=[facial_id])
+        self.fid_extractor = Model(inputs=[input1], outputs=[facial_id])
     
+    def _make_face_identifier(self):
+        """Make face identifier."""
+        facial_id_a = Input(shape=(self.hps['dense1'],))
+        facial_id_c = Input(shape=(self.hps['dense1'],))
+        
+        # Calculate the difference of both face features and judge a same person.
+        xd = self.model.get_layer('lambda1')([facial_id_a, facial_id_c])
+        
+        for i in range(self.hps['num_dense2_layers']):
+            xd = self.model.get_layer('dense2_' + str(i))(xd)
+            xd = LeakyReLU()(xd)
+        
+        output = self.model.get_layer('output')(xd)
+        self.face_identifier = Model(inputs=[facial_id_a, facial_id_c], outputs=[output])
+
     @property
     def YOLOV3Base(self):
         """Get yolov3 as a base model.
@@ -346,7 +339,7 @@ class FaceReIdentifier(object):
         
         if YOLO3_BASE_MODEL_LOAD_FLAG:
             base = load_model('yolov3_base.hd5')
-            base.trainable = False
+            base.trainable = True
             return base
         
         yolov3 = make_yolov3_model()
@@ -356,11 +349,11 @@ class FaceReIdentifier(object):
         weight_reader.load_weights(yolov3)
         
         # Make a base model.
-        input = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3))
+        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3))
         
         # 0 ~ 1.
         conv_layer = yolov3.get_layer('conv_' + str(0))
-        x = ZeroPadding2D(1)(input) #?               
+        x = ZeroPadding2D(1)(input1) #?               
         x = conv_layer(x)
         norm_layer = yolov3.get_layer('bnorm_' + str(0))
         x = norm_layer(x)
@@ -548,14 +541,14 @@ class FaceReIdentifier(object):
         
         output = x
         base = Model(inputs=[input], outputs=[output])
-        base.trainable = False
+        base.trainable = True
         base.save('yolov3_base.hd5')
         
         return base
         
     def train(self):
         """Train face detector."""
-        trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=True)
+        trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
             
         self.model.fit_generator(trGen
                       , steps_per_epoch=self.hps['step_per_epoch']                  
@@ -584,7 +577,7 @@ class FaceReIdentifier(object):
             images = []
             
             for ff in list(df.iloc[:, 1]):
-                image = cv.imread(os.path.join(self.raw_data_path, 'subject_faces', ff))
+                image = cv.imread(os.path.join('subject_faces', ff))
                 images.append(image/255)
             
             images = np.asarray(images)
@@ -612,8 +605,11 @@ class FaceReIdentifier(object):
             Testing directory.
         output_file_path : string
             Output file path.
-        """        
+        """ 
+        gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
+        gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
+        
         with open('db_facial_id.pobj', 'rb') as f:
             db_facial_id = pickle.load(f)
         
@@ -628,6 +624,8 @@ class FaceReIdentifier(object):
         
         # Detect faces, identify faces and save results.
         count1 = 1
+        es = []
+        probs = []
         
         with open(output_file_path, 'w') as f:
             for file_name in file_names:
@@ -754,28 +752,63 @@ class FaceReIdentifier(object):
                     anchor_facial_id = np.squeeze(anchor_facial_id)
                     anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
                     
-                    # Calculate similarity distances for each registered face ids.
-                    sim_dists = []
-                    for i in range(len(subject_ids)):
-                        sim_dists.append(norm(anchor_facial_ids[i] - reg_facial_ids[i]))
-                    sim_dists = np.asarray(sim_dists)
-                    cand = np.argmax(sim_dists)
-
-                    if sim_dists[cand] > self.hps['sim_th']:
+                    # Calculate consistency probabilities for each registered face ids.
+                    cons_probs = self.face_identifier.predict([anchor_facial_ids, reg_facial_ids])
+                    cons_probs = np.squeeze(cons_probs)
+                
+                    # Check whether an anchor facial id is a registered facial id.
+                    e = entropy(cons_probs)             
+                    idx = np.argmax(cons_probs)
+                    es.append(e)
+                    probs.append(cons_probs[idx])
+                    
+                    if cons_probs[idx] < self.hps['prob_th'] and e < self.hps['entropy_th']:
+                        box.subject_id = -1
                         continue
                     
-                    subject_id = subject_ids[cand]     
+                    subject_id = subject_ids[idx]
+                    box.subject_id = subject_id    
                     
-                    f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    if platform.system() == 'Windows':
+                        f.write(file_name.split('\\')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    else:
+                        f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                        
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 
+                boxes = [box for box in boxes if box.subject_id != -1]
+
+                # Draw bounding boxes of ground truth.
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                else:
+                    file_new_name = file_name.split('/')[-1]
+                
+                df = gt_df_g.get_group(file_new_name)
+                gt_boxes = []
+                
+                for i in range(df.shape[0]):
+                    # Check exception.
+                    res = df.iloc[i, 3:] > 0 #?
+                    if res.all() == False or df.iloc[i, 2] == -1:
+                        continue
+                    
+                    xmin = int(df.iloc[i, 3])
+                    xmax = int(xmin + df.iloc[i, 5] - 1)
+                    ymin = int(df.iloc[i, 4])
+                    ymax = int(ymin + df.iloc[i, 6] - 1)                    
+                    gt_box = BoundBox(xmin, ymin, xmax, ymax, objness=1., classes=[1.0], subject_id=df.iloc[i, 2])
+                    gt_boxes.append(gt_box)
+                 
                 # Check exception.
-                if len(boxes) == 0:
+                if len(gt_boxes) == 0 or len(boxes) == 0: #?
                     continue
+                    
+                image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th'], color=(255, 0, 0)) 
 
                 # Draw bounding boxes on the image using labels.
-                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
+                image = draw_boxes_v3(image, boxes, self.hps['face_conf_th'], color=(0, 255, 0)) 
          
                 # Write the image with bounding boxes to file.
                 # Draw bounding boxes of ground truth.
@@ -788,6 +821,11 @@ class FaceReIdentifier(object):
                 
                 print(file_new_name)
                 imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+        
+        es_df = pd.DataFrame(es)
+        es_df.to_csv('es.csv')
+        probs_df = pd.DataFrame(probs)
+        probs_df.to_csv('probs.csv')
         
     def test(self, test_path, output_file_path):
         """Test.
@@ -939,18 +977,15 @@ class FaceReIdentifier(object):
                     anchor_facial_id = np.squeeze(anchor_facial_id)
                     anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
                     
-                    # Calculate similarity distances for each registered face ids.
-                    sim_dists = []
-                    for i in range(len(subject_ids)):
-                        sim_dists.append(norm(anchor_facial_ids[i] - reg_facial_ids[i]))
-                    sim_dists = np.asarray(sim_dists)
-                    cand = np.argmin(sim_dists)
-
-                    print(sim_dists[cand] )
-                    if sim_dists[cand] > self.hps['sim_th']:
+                    # Calculate consistency probabilities for each registered face ids.
+                    cons_probs = self.face_identifier.predict([anchor_facial_ids, reg_facial_ids])
+                    cons_probs = np.squeeze(cons_probs)
+                    
+                    idx = np.argmax(cons_probs)
+                    if cons_probs[idx] < self.hps['prob_th']:
                         continue
                     
-                    subject_id = subject_ids[cand]    
+                    subject_id = subject_ids[idx]  
                     
                     f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
@@ -1034,6 +1069,40 @@ def main(args):
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
+    elif args.mode == 'evaluate':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+        output_file_path = args.output_file_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size)
+        hps['num_dense1_layers'] = int(args.num_dense1_layers)
+        hps['dense1'] = int(args.dense1)
+        hps['num_dense2_layers'] = int(args.num_dense2_layers)
+        hps['dense2'] = int(args.dense2)  
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
+        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['epochs'] = int(args.epochs) 
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+        hps['prob_th'] = float(args.prob_th)
+        hps['entropy_th'] = float(args.entropy_th)
+        
+        model_loading = False if int(args.model_loading) == 0 else True        
+        
+        # Test.
+        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        
+        ts = time.time()
+        #fr.register_facial_ids()
+        fr.evaluate(raw_data_path, output_file_path)
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))
     elif args.mode == 'test':
         # Get arguments.
         raw_data_path = args.raw_data_path
@@ -1054,7 +1123,8 @@ def main(args):
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
         hps['num_cands'] = int(args.num_cands)
-        hps['sim_th'] = float(args.sim_th)
+        hps['prob_th'] = float(args.prob_th)
+        hps['entropy_th'] = float(args.entropy_th)
         
         model_loading = False if int(args.model_loading) == 0 else True        
         
@@ -1090,7 +1160,8 @@ if __name__ == '__main__':
     parser.add_argument('--face_conf_th')
     parser.add_argument('--nms_iou_th')
     parser.add_argument('--num_cands')
-    parser.add_argument('--sim_th')
+    parser.add_argument('--prob_th')
+    parser.add_argument('--entropy_th')
     parser.add_argument('--model_loading')
     args = parser.parse_args()
     

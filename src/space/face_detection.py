@@ -449,7 +449,7 @@ class FaceDetector(object):
                 
                 for i in range(df.shape[0]):
                     # Check exception.
-                    res = gt_df.iloc[i, 3:] > 0
+                    res = df.iloc[i, 3:] > 0
                     if res.all() == False:
                         continue
                     
