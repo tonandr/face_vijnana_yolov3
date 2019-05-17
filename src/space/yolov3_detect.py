@@ -514,7 +514,7 @@ def draw_boxes_v2(rawImage, boxes, cls_thresh):
         imageDraw = ImageDraw.Draw(imageObject)
         imageDraw.rectangle([box.xmin, box.ymin, box.xmax, box.ymax], outline=(0, 255, 0), width=1)
         font = ImageFont.truetype('arial.ttf', 25)
-        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), fill=(0, 255, 0), font=font)
+        imageDraw.text((box.xmin , box.ymin - 20), str(box.get_score()) + ', ' + str(box.classes[0]), fill=(0, 255, 0), font=font)
         image = np.asarray(imageObject)
     
     return image
@@ -530,7 +530,7 @@ def draw_boxes_v3(rawImage, boxes, cls_thresh, color=(0, 255, 0)):
         imageDraw = ImageDraw.Draw(imageObject)
         imageDraw.rectangle([box.xmin, box.ymin, box.xmax, box.ymax], outline=color, width=3)
         font = ImageFont.truetype('arial.ttf', 25)
-        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) \
+        imageDraw.text((box.xmin, box.ymin - 20), str(box.get_score()) \
                        + ', ' + str(box.classes[0]) + ', ' + str(box.subject_id), fill=color, font=font)
         image = np.asarray(imageObject)
     

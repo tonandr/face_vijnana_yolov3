@@ -33,6 +33,7 @@ import glob
 import argparse
 import time
 import platform
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -54,16 +55,16 @@ from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, 
 
 # Constants.
 DEBUG = True
-MULTI_GPU = False
+MULTI_GPU = True
 NUM_GPUS = 4
-YOLO3_BASE_MODEL_LOAD_FLAG = True
+YOLO3_BASE_MODEL_LOAD_FLAG = False
 
 RATIO_TH = 0.8
 
 class FaceDetector(object):
     """Face detector to use yolov3."""
     # Constants.
-    MODEL_PATH = 'face_detector.hd5'
+    MODEL_PATH = 'face_detector.h5'
     OUTPUT_FILE_NAME = 'solution.csv'
     EVALUATION_FILE_NAME = 'eval.csv'
     CELL_SIZE = 13
@@ -104,16 +105,9 @@ class FaceDetector(object):
                     df.index = range(df.shape[0])
                     
                     # Load an image.
-                    image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                    image = imread(os.path.join(self.raw_data_path, file_name))
                     image = image/255
-                                            
-                    r = image[:, :, 0].copy()
-                    g = image[:, :, 1].copy()
-                    b = image[:, :, 2].copy()
-                    image[:, :, 0] = b
-                    image[:, :, 1] = g
-                    image[:, :, 2] = r 
-                 
+                  
                     # Adjust the original image size into the normalized image size according to the ratio of width, height.
                     w = image.shape[1]
                     h = image.shape[0]
@@ -214,16 +208,9 @@ class FaceDetector(object):
                     df.index = range(df.shape[0])
                     
                     # Load an image.
-                    image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                    image = imread(os.path.join(self.raw_data_path, file_name))
                     image = image/255
-                                            
-                    r = image[:, :, 0].copy()
-                    g = image[:, :, 1].copy()
-                    b = image[:, :, 2].copy()
-                    image[:, :, 0] = b
-                    image[:, :, 1] = g
-                    image[:, :, 2] = r 
-                 
+                                                             
                     # Adjust the original image size into the normalized image size according to the ratio of width, height.
                     w = image.shape[1]
                     h = image.shape[0]
@@ -398,7 +385,7 @@ class FaceDetector(object):
             Partial yolo3 model from the input layer to the add_23 layer
         """
         if YOLO3_BASE_MODEL_LOAD_FLAG:
-            base = load_model('yolov3_base.hd5')
+            base = load_model('yolov3_base.h5')
             base.trainable = True
             return base
 
@@ -602,7 +589,7 @@ class FaceDetector(object):
         output = x
         base = Model(inputs=[input], outputs=[output])
         base.trainable = True
-        base.save('yolov3_base.hd5')
+        base.save('yolov3_base.h5')
         
         return base
 
@@ -642,6 +629,12 @@ class FaceDetector(object):
         output_file_path : string
             Output file path.
         """
+        if not os.path.isdir(os.path.join(self.raw_data_path, 'results')):
+            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+        else:
+            shutil.rmtree(os.path.join(self.raw_data_path, 'results'))
+            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+
         gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
@@ -655,17 +648,10 @@ class FaceDetector(object):
                 count1 += 1
                 
                 # Load an image.
-                image = cv.imread(os.path.join(test_path, file_name))
+                image = imread(os.path.join(test_path, file_name))
                 image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
                 image = image/255
-                                    
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
              
                 # Adjust the original image size into the normalized image size according to the ratio of width, height.
                 w = image.shape[1]
@@ -802,17 +788,10 @@ class FaceDetector(object):
                 count1 += 1
                 
                 # Load an image.
-                image = cv.imread(os.path.join(test_path, file_name))
+                image = imread(os.path.join(test_path, file_name))
                 image = image/255
                 image_o = image.copy() 
                 
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
-             
                 # Adjust the original image size into the normalized image size according to the ratio of width, height.
                 w = image.shape[1]
                 h = image.shape[0]
@@ -1024,7 +1003,7 @@ def main(args):
         
         model_loading = False if int(args.model_loading) == 0 else True        
         
-        fd = FaceDetector(raw_data_path, hps, True)
+        fd = FaceDetector(raw_data_path, hps, model_loading)
         
         ts = time.time()
         fd.evaluate(raw_data_path, output_file_path)
@@ -1052,7 +1031,7 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Test.
-        fd = FaceDetector(raw_data_path, hps, True)
+        fd = FaceDetector(raw_data_path, hps, model_loading)
         
         ts = time.time()
         fd.test(raw_data_path, output_file_path)

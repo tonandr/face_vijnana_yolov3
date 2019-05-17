@@ -57,9 +57,9 @@ from random import shuffle
 
 # Constants.
 DEBUG = True
-MULTI_GPU = False
+MULTI_GPU = True
 NUM_GPUS = 4
-YOLO3_BASE_MODEL_LOAD_FLAG = True
+YOLO3_BASE_MODEL_LOAD_FLAG = False
 ALPHA = 0.2
 
 def triplet_loss(y_true, y_pred):
@@ -70,6 +70,12 @@ def triplet_loss(y_true, y_pred):
                          
 def create_db_fri(raw_data_path, hps):
     """Create db for face re-identifier."""
+    if not os.path.isdir(os.path.join('subject_faces')):
+        os.mkdir(os.path.join('subject_faces'))
+    else:
+        shutil.rmtree(os.path.join('subject_faces'))
+        os.mkdir(os.path.join(os.path.join('subject_faces')))    
+
     gt_df = pd.read_csv(os.path.join(raw_data_path, 'training', 'training.csv'))
     gt_df_g = gt_df.groupby('SUBJECT_ID')
     
@@ -146,7 +152,7 @@ def create_db_fri(raw_data_path, hps):
                 + str(int(df.iloc[i, 3])) + '_' + str(int(df.iloc[i, 4])) + file_name[-4:]
                 
             print('Save ' + face_file_name)
-            imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name), (image).astype('uint8'))           
+            imsave(os.path.join('subject_faces', face_file_name), (image).astype('uint8'))           
             
             # Add subject face information into db.
             db = pd.concat([db, pd.DataFrame({'subject_id': [k]
@@ -159,7 +165,7 @@ def create_db_fri(raw_data_path, hps):
 class FaceReIdentifier(object):
     """Face re-identifier to use yolov3."""
     # Constants.
-    MODEL_PATH = 'face_reidentifier.hd5'
+    MODEL_PATH = 'face_reidentifier.h5'
 
     class TrainingSequence(Sequence):
         """Training data set sequence."""
@@ -415,7 +421,7 @@ class FaceReIdentifier(object):
         """
         
         if YOLO3_BASE_MODEL_LOAD_FLAG:
-            base = load_model('yolov3_base.hd5')
+            base = load_model('yolov3_base.h5')
             base.trainable = True
             return base
         
@@ -619,7 +625,7 @@ class FaceReIdentifier(object):
         output = x
         base = Model(inputs=[input], outputs=[output])
         base.trainable = True
-        base.save('yolov3_base.hd5')
+        base.save('yolov3_base.h5')
         
         return base
         
@@ -846,8 +852,8 @@ class FaceReIdentifier(object):
                     sim_dists = np.asarray(sim_dists)
                     cand = np.argmin(sim_dists)
 
-                    if sim_dists[cand] > self.hps['sim_th']:
-                        continue
+                    #if sim_dists[cand] > self.hps['sim_th']:
+                    #    continue
                     
                     subject_id = subject_ids[cand]
                     box.subject_id = subject_id     
