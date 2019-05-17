@@ -1,5 +1,6 @@
 # Face recognition Keras model based on yolov3
-![Imgur](recog_samples/0063bedf8fac654abf9b36e8d372d9c4_detected.jpg)
+![Imgur](014bf8ede65b5b52ac83f00b7cd6e2f9_detected.jpg)
+![Imgur](01c2ee2fdfddb91abd41e8b31033d40a_detected.jpg)
 
 Using the pretranied [yolov3 Keras model](https://github.com/experiencor/keras-yolo3), we develop one shot learning face recognition model using Keras.
 The face recognition model consists of face detection and face identification models, and using uncontrained college students face dataset provided by 
