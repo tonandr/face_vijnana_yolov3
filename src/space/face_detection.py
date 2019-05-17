@@ -39,10 +39,260 @@ RATIO_TH = 0.8
 class FaceDetector(object):
     """Face detector to use yolov3."""
     # Constants.
-    MODEL_FILE_NAME = 'face_detector.hd5'
+    MODEL_PATH = 'face_detector.hd5'
     OUTPUT_FILE_NAME = 'solution.csv'
     EVALUATION_FILE_NAME = 'eval.csv'
     CELL_SIZE = 13
+
+    class TrainingSequence(Sequence):
+        """Training data set sequence."""
+        
+        def __init__(self, raw_data_path, hps, CELL_SIZE, cell_image_size):
+            # Get ground truth.
+            self.raw_data_path = raw_data_path
+            self.hps = hps
+            self.gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
+            self.gt_df_g = self.gt_df.groupby('FILE')
+            self.file_names = list(self.gt_df_g.groups.keys())
+            self.batch_size = self.hps['batch_size'] 
+            self.hps['step'] = len(self.file_names) // self.batch_size
+            
+            if len(self.file_names) % self.batch_size != 0:
+                self.hps['step'] +=1
+            
+            self.CELL_SIZE = CELL_SIZE
+            self.cell_image_size = cell_image_size
+        
+        def __len__(self):
+            return self.hps['step']
+        
+        def __getitem__(self, index):
+            images = []
+            gt_tensors = []
+            
+            # Check the last index.
+            if index == (self.hps['step'] - 1):
+                for bi in range(index * self.batch_size, len(self.file_names)):
+                    file_name = self.file_names[bi] 
+                    #if DEBUG: print(file_name )
+                    
+                    df = self.gt_df_g.get_group(file_name)
+                    df.index = range(df.shape[0])
+                    
+                    # Load an image.
+                    image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                    image = image/255
+                                            
+                    r = image[:, :, 0].copy()
+                    g = image[:, :, 1].copy()
+                    b = image[:, :, 2].copy()
+                    image[:, :, 0] = b
+                    image[:, :, 1] = g
+                    image[:, :, 2] = r 
+                 
+                    # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                    w = image.shape[1]
+                    h = image.shape[0]
+                    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                    
+                    if w >= h:
+                        w_p = self.hps['image_size']
+                        h_p = int(h / w * self.hps['image_size'])
+                        pad = self.hps['image_size'] - h_p
+                        
+                        if pad % 2 == 0:
+                            pad_t = pad // 2
+                            pad_b = pad // 2
+                        else:
+                            pad_t = pad // 2
+                            pad_b = pad // 2 + 1
+        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                    else:
+                        h_p = self.hps['image_size']
+                        w_p = int(w / h * self.hps['image_size'])
+                        pad = self.hps['image_size'] - w_p
+                        
+                        if pad % 2 == 0:
+                            pad_l = pad // 2
+                            pad_r = pad // 2
+                        else:
+                            pad_l = pad // 2
+                            pad_r = pad // 2 + 1                
+                        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
+                        
+                    # Create a ground truth bound box tensor (13x13x6).
+                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
+                    
+                    for i in range(df.shape[0]):
+                        # Check exception.
+                        res = df.iloc[i, 3:] > 0
+                        if res.all() == False:
+                            continue
+                    
+                        # Calculate a target feature tensor according to the ratio of width, height.
+                        # Calculate a transformed raw bound box.
+                        #print(df.columns)
+                        x1 = int(df.loc[i, 'FACE_X'])
+                        y1 = int(df.loc[i, 'FACE_Y'])
+                        x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
+                        y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
+                        wb = x2 - x1 + 1
+                        hb = y2 - y1 + 1
+                        
+                        if w >= h:
+                            x1_p = int(x1 / w * self.hps['image_size'])
+                            y1_p = int(y1 / w * self.hps['image_size']) + pad_t
+                            x2_p = int(x2 / w * self.hps['image_size'])
+                            y2_p = int(y2 / w * self.hps['image_size']) + pad_t
+                        else:
+                            x1_p = int(x1 / h * self.hps['image_size']) + pad_l
+                            y1_p = int(y1 / h * self.hps['image_size'])
+                            x2_p = int(x2 / h * self.hps['image_size']) + pad_l
+                            y2_p = int(y2 / h * self.hps['image_size'])                   
+                        
+                        # Calculate a cell position.
+                        xc_p = (x1_p + x2_p) // 2
+                        yc_p = (y1_p + y2_p) // 2
+                        cx = xc_p // self.cell_image_size
+                        cy = yc_p // self.cell_image_size
+                        
+                        # Calculate a bound box's ratio coordinate.
+                        bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
+                        by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
+                        
+                        if w >= h: 
+                            bw_p = wb / w #?
+                            bh_p = hb / w
+                        else:
+                            bw_p = wb / h
+                            bh_p = hb / h
+                        
+                        # Assign a bound box's values into the tensor.
+                        gt_tensor[cy, cx, 0] = 1.
+                        gt_tensor[cy, cx, 1] = bx_p
+                        gt_tensor[cy, cx, 2] = by_p
+                        gt_tensor[cy, cx, 3] = bw_p
+                        gt_tensor[cy, cx, 4] = bh_p
+                        gt_tensor[cy, cx, 5] = 1.
+                        
+                    images.append(image)
+                    gt_tensors.append(gt_tensor)            
+            else:
+                for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
+                    file_name = self.file_names[bi] 
+                    #if DEBUG: print(file_name )
+                    
+                    df = self.gt_df_g.get_group(file_name)
+                    df.index = range(df.shape[0])
+                    
+                    # Load an image.
+                    image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                    image = image/255
+                                            
+                    r = image[:, :, 0].copy()
+                    g = image[:, :, 1].copy()
+                    b = image[:, :, 2].copy()
+                    image[:, :, 0] = b
+                    image[:, :, 1] = g
+                    image[:, :, 2] = r 
+                 
+                    # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                    w = image.shape[1]
+                    h = image.shape[0]
+                    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                    
+                    if w >= h:
+                        w_p = self.hps['image_size']
+                        h_p = int(h / w * self.hps['image_size'])
+                        pad = self.hps['image_size'] - h_p
+                        
+                        if pad % 2 == 0:
+                            pad_t = pad // 2
+                            pad_b = pad // 2
+                        else:
+                            pad_t = pad // 2
+                            pad_b = pad // 2 + 1
+        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                    else:
+                        h_p = self.hps['image_size']
+                        w_p = int(w / h * self.hps['image_size'])
+                        pad = self.hps['image_size'] - w_p
+                        
+                        if pad % 2 == 0:
+                            pad_l = pad // 2
+                            pad_r = pad // 2
+                        else:
+                            pad_l = pad // 2
+                            pad_r = pad // 2 + 1                
+                        
+                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
+                        
+                    # Create a ground truth bound box tensor (13x13x6).
+                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
+                    
+                    for i in range(df.shape[0]):
+                        # Check exception.
+                        res = df.iloc[i, 3:] > 0
+                        if res.all() == False:
+                            continue
+                    
+                        # Calculate a target feature tensor according to the ratio of width, height.
+                        # Calculate a transformed raw bound box.
+                        #print(df.columns)
+                        x1 = int(df.loc[i, 'FACE_X'])
+                        y1 = int(df.loc[i, 'FACE_Y'])
+                        x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
+                        y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
+                        wb = x2 - x1 + 1
+                        hb = y2 - y1 + 1
+                        
+                        if w >= h:
+                            x1_p = int(x1 / w * self.hps['image_size'])
+                            y1_p = int(y1 / w * self.hps['image_size']) + pad_t
+                            x2_p = int(x2 / w * self.hps['image_size'])
+                            y2_p = int(y2 / w * self.hps['image_size']) + pad_t
+                        else:
+                            x1_p = int(x1 / h * self.hps['image_size']) + pad_l
+                            y1_p = int(y1 / h * self.hps['image_size'])
+                            x2_p = int(x2 / h * self.hps['image_size']) + pad_l
+                            y2_p = int(y2 / h * self.hps['image_size'])                   
+                        
+                        # Calculate a cell position.
+                        xc_p = (x1_p + x2_p) // 2
+                        yc_p = (y1_p + y2_p) // 2
+                        cx = xc_p // self.cell_image_size
+                        cy = yc_p // self.cell_image_size
+                        
+                        # Calculate a bound box's ratio coordinate.
+                        bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
+                        by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
+                        
+                        if w >= h: 
+                            bw_p = wb / w #?
+                            bh_p = hb / w
+                        else:
+                            bw_p = wb / h
+                            bh_p = hb / h
+                        
+                        # Assign a bound box's values into the tensor.
+                        gt_tensor[cy, cx, 0] = 1.
+                        gt_tensor[cy, cx, 1] = bx_p
+                        gt_tensor[cy, cx, 2] = by_p
+                        gt_tensor[cy, cx, 3] = bw_p
+                        gt_tensor[cy, cx, 4] = bh_p
+                        gt_tensor[cy, cx, 5] = 1.
+                        
+                    images.append(image)
+                    gt_tensors.append(gt_tensor)
+                                                                         
+            return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})   
 
     def __init__(self, raw_data_path, hps, model_loading):
         """
@@ -62,17 +312,26 @@ class FaceDetector(object):
         self.cell_image_size = hps['image_size'] // self.CELL_SIZE # ?
         
         if model_loading: 
-            self.model = load_model(self.MODEL_FILE_NAME)
+            if MULTI_GPU:
+                self.model = load_model(self.MODEL_PATH)
+                self.parallel_model = multi_gpu_model(self.model, gpus = NUM_GPUS)
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay']) 
+                self.parallel_model.compile(optimizer=opt, loss='mse') 
+            else:
+                self.model = load_model(self.MODEL_PATH)
         else:
             # Design the face detector model.
             # Input.
-            input = Input(shape=(hps['image_size'], hps['image_size'], 3), name='input')
+            input1 = Input(shape=(hps['image_size'], hps['image_size'], 3), name='input1')
 
             # Load yolov3 as the base model.
             base = self.YOLOV3Base 
             
             # Get 13x13x6 target features. #?
-            x = base(input) # Non-linear.
+            x = base(input1) # Non-linear.
             output = Conv2D(filters=hps['num_filters']
                        , activation='linear'
                        , kernel_size=(3, 3)
@@ -80,18 +339,30 @@ class FaceDetector(object):
                        , name='output')(x)
 
             if MULTI_GPU:
-                self.model = multi_gpu_model(Model(inputs=[input], outputs=[output])
-                                                   , gpus = NUM_GPUS)
-            else:
-                self.model = Model(inputs=[input], outputs=[output])
+                self.model = Model(inputs=[input1], outputs=[output])
 
-            opt = optimizers.Adam(lr=self.hps['lr']
-                                    , beta_1=self.hps['beta_1']
-                                    , beta_2=self.hps['beta_2']
-                                    , decay=self.hps['decay'])
-            
-            self.model.compile(optimizer=opt, loss='mse')
-            self.model.summary()
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay'])
+                
+                self.model.compile(optimizer=opt, loss='mse')
+                self.model.summary()
+                
+                self.parallel_model = multi_gpu_model(self.model, gpus = NUM_GPUS)
+                self.parallel_model.compile(optimizer=opt, loss='mse')
+                self.parallel_model.summary()
+                
+            else:
+                self.model = Model(inputs=[input1], outputs=[output])
+
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay'])
+                
+                self.model.compile(optimizer=opt, loss='mse')
+                self.model.summary()
 
     @property
     def YOLOV3Base(self):
@@ -104,6 +375,7 @@ class FaceDetector(object):
         """
         if YOLO3_BASE_MODEL_LOAD_FLAG:
             base = load_model('yolov3_base.hd5')
+            base.trainable = True
             return base
 
         yolov3 = make_yolov3_model()
@@ -113,11 +385,11 @@ class FaceDetector(object):
         weight_reader.load_weights(yolov3)
         
         # Make a base model.
-        input = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3))
+        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3))
         
         # 0 ~ 1.
         conv_layer = yolov3.get_layer('conv_' + str(0))
-        x = ZeroPadding2D(1)(input) #?               
+        x = ZeroPadding2D(1)(input1) #?               
         x = conv_layer(x)
         norm_layer = yolov3.get_layer('bnorm_' + str(0))
         x = norm_layer(x)
@@ -305,6 +577,7 @@ class FaceDetector(object):
         
         output = x
         base = Model(inputs=[input], outputs=[output])
+        base.trainable = True
         base.save('yolov3_base.hd5')
         
         return base
@@ -315,16 +588,25 @@ class FaceDetector(object):
         #tr_gen = self._get_training_generator()
         tr_gen = self.TrainingSequence(self.raw_data_path, self.hps, self.CELL_SIZE, self.cell_image_size)
         
-        self.model.fit_generator(tr_gen
-                      , steps_per_epoch=self.hps['step_per_epoch']                  
+        if MULTI_GPU:
+            self.parallel_model.fit_generator(tr_gen
+                      , steps_per_epoch=self.hps['step']                  
                       , epochs=self.hps['epochs']
                       , verbose=1
-                      , max_queue_size=1000
+                      , max_queue_size=100
                       , workers=8
+                      , use_multiprocessing=True)
+        else:
+            self.model.fit_generator(tr_gen
+                      , steps_per_epoch=self.hps['step']                  
+                      , epochs=self.hps['epochs']
+                      , verbose=1
+                      , max_queue_size=100
+                      , workers=4
                       , use_multiprocessing=True)
         
         print('Save the model.')            
-        self.model.save(self.MODEL_FILE_NAME)
+        self.model.save(self.MODEL_PATH)
     
     def evaluate(self, test_path, output_file_path):
         """Evaluate.
@@ -339,7 +621,8 @@ class FaceDetector(object):
         gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
-        ratios = []        
+        ratios = []
+                
         # Detect faces and save results.
         count1 = 1
         with open(output_file_path, 'w') as f:
@@ -497,7 +780,6 @@ class FaceDetector(object):
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
                 image = image/255
-                image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
                 
                 r = image[:, :, 0].copy()
@@ -544,7 +826,7 @@ class FaceDetector(object):
                 image = image[np.newaxis, :]
                        
                 # Detect faces.
-                boxes = self.detect(image, image_o_size)
+                boxes = self.detect(image)
                 
                 # Correct the sizes of the bounding boxes
                 for box in boxes:
@@ -594,398 +876,19 @@ class FaceDetector(object):
                 print(file_new_name)
                 imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
                 '''
-    
-    class TrainingSequence(Sequence):
-        """Training data set sequence."""
-        
-        def __init__(self, raw_data_path, hps, CELL_SIZE, cell_image_size):
-            # Get ground truth.
-            self.raw_data_path = raw_data_path
-            self.hps = hps
-            self.gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
-            self.gt_df_g = self.gt_df.groupby('FILE')
-            self.file_names = list(self.gt_df_g.groups.keys())
-            self.batch_size = len(self.file_names) // self.hps['step_per_epoch']
-            self.CELL_SIZE = CELL_SIZE
-            self.cell_image_size = cell_image_size
-        
-        def __len__(self):
-            return int(np.floor(len(self.file_names) / self.batch_size))
-        
-        def __getitem__(self, index):
-            # Check the last index.
-            # TODO
-            
-            images = []
-            gt_tensors = []
-            
-            for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
-                file_name = self.file_names[bi] 
-                #if DEBUG: print(file_name )
-                
-                df = self.gt_df_g.get_group(file_name)
-                df.index = range(df.shape[0])
-                
-                # Load an image.
-                image = cv.imread(os.path.join(self.raw_data_path, file_name))
-                image = image/255
-                                        
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
-             
-                # Adjust the original image size into the normalized image size according to the ratio of width, height.
-                w = image.shape[1]
-                h = image.shape[0]
-                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
-                                
-                if w >= h:
-                    w_p = self.hps['image_size']
-                    h_p = int(h / w * self.hps['image_size'])
-                    pad = self.hps['image_size'] - h_p
-                    
-                    if pad % 2 == 0:
-                        pad_t = pad // 2
-                        pad_b = pad // 2
-                    else:
-                        pad_t = pad // 2
-                        pad_b = pad // 2 + 1
-    
-                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
-                else:
-                    h_p = self.hps['image_size']
-                    w_p = int(w / h * self.hps['image_size'])
-                    pad = self.hps['image_size'] - w_p
-                    
-                    if pad % 2 == 0:
-                        pad_l = pad // 2
-                        pad_r = pad // 2
-                    else:
-                        pad_l = pad // 2
-                        pad_r = pad // 2 + 1                
-                    
-                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
-                    
-                # Create a ground truth bound box tensor (13x13x6).
-                gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
-                
-                for i in range(df.shape[0]):
-                    # Check exception.
-                    res = df.iloc[i, 3:] > 0
-                    if res.all() == False:
-                        continue
-                
-                    # Calculate a target feature tensor according to the ratio of width, height.
-                    # Calculate a transformed raw bound box.
-                    #print(df.columns)
-                    x1 = int(df.loc[i, 'FACE_X'])
-                    y1 = int(df.loc[i, 'FACE_Y'])
-                    x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
-                    y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
-                    wb = x2 - x1 + 1
-                    hb = y2 - y1 + 1
-                    
-                    if w >= h:
-                        x1_p = int(x1 / w * self.hps['image_size'])
-                        y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                        x2_p = int(x2 / w * self.hps['image_size'])
-                        y2_p = int(y2 / w * self.hps['image_size']) + pad_t
-                    else:
-                        x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                        y1_p = int(y1 / h * self.hps['image_size'])
-                        x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                        y2_p = int(y2 / h * self.hps['image_size'])                   
-                    
-                    # Calculate a cell position.
-                    xc_p = (x1_p + x2_p) // 2
-                    yc_p = (y1_p + y2_p) // 2
-                    cx = xc_p // self.cell_image_size
-                    cy = yc_p // self.cell_image_size
-                    
-                    # Calculate a bound box's ratio coordinate.
-                    bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
-                    by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
-                    
-                    if w >= h: 
-                        bw_p = wb / w #?
-                        bh_p = hb / w
-                    else:
-                        bw_p = wb / h
-                        bh_p = hb / h
-                    
-                    # Assign a bound box's values into the tensor.
-                    gt_tensor[cy, cx, 0] = 1.
-                    gt_tensor[cy, cx, 1] = bx_p
-                    gt_tensor[cy, cx, 2] = by_p
-                    gt_tensor[cy, cx, 3] = bw_p
-                    gt_tensor[cy, cx, 4] = bh_p
-                    gt_tensor[cy, cx, 5] = 1.
-                    
-                images.append(image)
-                gt_tensors.append(gt_tensor)
-                                                                         
-            return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})                 
-                                
-    def _get_training_generator(self):
-        """Get a training data generator.
-        
-        Returns
-        -------
-        generator
-            ({'input': image, 'output': gtTensor})
-        """
-        # Get ground truth.
-        gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
-        gt_df_g = gt_df.groupby('FILE')
-        file_names = list(gt_df_g.groups.keys())
-        
-        while True:
-            #remainder = len(file_names) % self.hps['step_per_epoch']
-            #remainder = 0 if remainder == 0 else 1
-                         
-            for bfi in range(self.hps['step_per_epoch']): # + remainder):
-                '''
-                if remainder == 1 and bfi == self.hps['step_per_epoch']:
-                    images = []
-                    gt_tensors = []
-                    
-                    for bi in range(self.hps['step_per_epoch'] * (len(file_names) // self.hps['step_per_epoch'])
-                                    , len(file_names)):
-                        file_name = file_names[bi] 
-                        if DEBUG: print(file_name + '\n')
-                        
-                        df = gt_df_g.get_group(file_name)
-                        df.index = range(df.shape[0])
-                        
-                        # Load an image.
-                        image = cv.imread(os.path.join(self.raw_data_path, file_name))
-                                                
-                        r = image[:, :, 0].copy()
-                        g = image[:, :, 1].copy()
-                        b = image[:, :, 2].copy()
-                        image[:, :, 0] = b
-                        image[:, :, 1] = g
-                        image[:, :, 2] = r 
-                     
-                        # Adjust the original image size into the normalized image size according to the ratio of width, height.
-                        w = image.shape[1]
-                        h = image.shape[0]
-                        pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
-                                        
-                        if w >= h:
-                            w_p = self.hps['image_size']
-                            h_p = int(h / w * self.hps['image_size'])
-                            pad = self.hps['image_size'] - h_p
-                            
-                            if pad % 2 == 0:
-                                pad_t = pad // 2
-                                pad_b = pad // 2
-                            else:
-                                pad_t = pad // 2
-                                pad_b = pad // 2 + 1
-            
-                            image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                            image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
-                        else:
-                            h_p = self.hps['image_size']
-                            w_p = int(w / h * self.hps['image_size'])
-                            pad = self.hps['image_size'] - w_p
-                            
-                            if pad % 2 == 0:
-                                pad_l = pad // 2
-                                pad_r = pad // 2
-                            else:
-                                pad_l = pad // 2
-                                pad_r = pad // 2 + 1                
-                            
-                            image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                            image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
-                            
-                        # Create a ground truth bound box tensor (13x13x6).
-                        gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
-                        
-                        for i in range(df.shape[0]):
-                            # Calculate a target feature tensor according to the ratio of width, height.
-                            # Calculate a transformed raw bound box.
-                            #print(df.columns)
-                            x1 = int(df.loc[i, 'FACE_X'])
-                            y1 = int(df.loc[i, 'FACE_Y'])
-                            x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
-                            y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
-                            wb = x2 - x1 + 1
-                            hb = y2 - y1 + 1
-                            
-                            if w >= h:
-                                x1_p = int(x1 / w * self.hps['image_size'])
-                                y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                                x2_p = int(x2 / w * self.hps['image_size'])
-                                y2_p = int(y2 / w * self.hps['image_size']) + pad_t
-                            else:
-                                x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                                y1_p = int(y1 / h * self.hps['image_size'])
-                                x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                                y2_p = int(y2 / h * self.hps['image_size'])                   
-                            
-                            # Calculate a cell position.
-                            xc_p = (x1_p + x2_p) // 2
-                            yc_p = (y1_p + y2_p) // 2
-                            cx = xc_p // self.cell_image_size
-                            cy = yc_p // self.cell_image_size
-                            
-                            # Calculate a bound box's ratio coordinate.
-                            bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
-                            by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
-                            
-                            if w >= h: 
-                                bw_p = wb / w #?
-                                bh_p = hb / w
-                            else:
-                                bw_p = wb / h
-                                bh_p = hb / h
-                            
-                            # Assign a bound box's values into the tensor.
-                            gt_tensor[cy, cx, 0] = 1.
-                            gt_tensor[cy, cx, 1] = bx_p
-                            gt_tensor[cy, cx, 2] = by_p
-                            gt_tensor[cy, cx, 3] = bw_p
-                            gt_tensor[cy, cx, 4] = bh_p
-                            gt_tensor[cy, cx, 5] = 1.
-                            
-                        images.append(image)
-                        gt_tensors.append(gt_tensor)
-                                                                                 
-                    yield ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})                    
-                else:
-                '''
-                images = []
-                gt_tensors = []
-                
-                for bi in range(bfi * (len(file_names) // self.hps['step_per_epoch'])
-                                , (bfi + 1) * (len(file_names) // self.hps['step_per_epoch'])):
-                    file_name = file_names[bi] 
-                    if DEBUG: print(file_name + '\n')
-                    
-                    df = gt_df_g.get_group(file_name)
-                    df.index = range(df.shape[0])
-                    
-                    # Load an image.
-                    image = cv.imread(os.path.join(self.raw_data_path, file_name))
-                                            
-                    r = image[:, :, 0].copy()
-                    g = image[:, :, 1].copy()
-                    b = image[:, :, 2].copy()
-                    image[:, :, 0] = b
-                    image[:, :, 1] = g
-                    image[:, :, 2] = r 
-                 
-                    # Adjust the original image size into the normalized image size according to the ratio of width, height.
-                    w = image.shape[1]
-                    h = image.shape[0]
-                    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
-                                    
-                    if w >= h:
-                        w_p = self.hps['image_size']
-                        h_p = int(h / w * self.hps['image_size'])
-                        pad = self.hps['image_size'] - h_p
-                        
-                        if pad % 2 == 0:
-                            pad_t = pad // 2
-                            pad_b = pad // 2
-                        else:
-                            pad_t = pad // 2
-                            pad_b = pad // 2 + 1
-        
-                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
-                    else:
-                        h_p = self.hps['image_size']
-                        w_p = int(w / h * self.hps['image_size'])
-                        pad = self.hps['image_size'] - w_p
-                        
-                        if pad % 2 == 0:
-                            pad_l = pad // 2
-                            pad_r = pad // 2
-                        else:
-                            pad_l = pad // 2
-                            pad_r = pad // 2 + 1                
-                        
-                        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
-                        
-                    # Create a ground truth bound box tensor (13x13x6).
-                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
-                    
-                    for i in range(df.shape[0]):
-                        # Calculate a target feature tensor according to the ratio of width, height.
-                        # Calculate a transformed raw bound box.
-                        #print(df.columns)
-                        x1 = int(df.loc[i, 'FACE_X'])
-                        y1 = int(df.loc[i, 'FACE_Y'])
-                        x2 = x1 + int(df.loc[i, 'FACE_WIDTH']) - 1
-                        y2 = y1 + int(df.loc[i, 'FACE_HEIGHT']) - 1
-                        wb = x2 - x1 + 1
-                        hb = y2 - y1 + 1
-                        
-                        if w >= h:
-                            x1_p = int(x1 / w * self.hps['image_size'])
-                            y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                            x2_p = int(x2 / w * self.hps['image_size'])
-                            y2_p = int(y2 / w * self.hps['image_size']) + pad_t
-                        else:
-                            x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                            y1_p = int(y1 / h * self.hps['image_size'])
-                            x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                            y2_p = int(y2 / h * self.hps['image_size'])                   
-                        
-                        # Calculate a cell position.
-                        xc_p = (x1_p + x2_p) // 2
-                        yc_p = (y1_p + y2_p) // 2
-                        cx = xc_p // self.cell_image_size
-                        cy = yc_p // self.cell_image_size
-                        
-                        # Calculate a bound box's ratio coordinate.
-                        bx_p = (xc_p - cx * self.cell_image_size) / self.cell_image_size
-                        by_p = (yc_p - cy * self.cell_image_size) / self.cell_image_size
-                        
-                        if w >= h: 
-                            bw_p = wb / w #?
-                            bh_p = hb / w
-                        else:
-                            bw_p = wb / h
-                            bh_p = hb / h
-                        
-                        # Assign a bound box's values into the tensor.
-                        gt_tensor[cy, cx, 0] = 1.
-                        gt_tensor[cy, cx, 1] = bx_p
-                        gt_tensor[cy, cx, 2] = by_p
-                        gt_tensor[cy, cx, 3] = bw_p
-                        gt_tensor[cy, cx, 4] = bh_p
-                        gt_tensor[cy, cx, 5] = 1.
-                        
-                    images.append(image)
-                    gt_tensors.append(gt_tensor)
-                                                        
-                yield ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})
-                    
-    def detect(self, image, image_size):
+                                                                    
+    def detect(self, image):
         """Detect faces.
         
         Parameters
         ----------
         images: 4d numpy array
             Images
-        image_size: tuple
-            Image x, y size list
                     
         Returns
         -------
         list
-            Face candidate bounding boxes
+            Face candidate bound boxes
         """
         # Get face region candidates.
         face_cands = self.model.predict(image) # 1x13x13x6. #?
@@ -1048,6 +951,7 @@ def main(args):
         Arguments
     """
     hps = {}
+    hps['step'] = 1
             
     if args.mode == 'train':
         # Get arguments.
@@ -1060,7 +964,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1088,7 +992,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1115,7 +1019,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1146,7 +1050,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta_1')
     parser.add_argument('--beta_2')
     parser.add_argument('--decay')
-    parser.add_argument('--step_per_epoch')
+    parser.add_argument('--batch_size')
     parser.add_argument('--epochs')
     parser.add_argument('--face_conf_th')
     parser.add_argument('--nms_iou_th')

@@ -10,11 +10,12 @@ import argparse
 import time
 import pickle
 import platform
+import shutil
 
 import numpy as np
 import pandas as pd
 import cv2 as cv
-from skimage.io import imsave
+from skimage.io import imread, imsave
 from scipy.stats import entropy
 from scipy.linalg import norm
 
@@ -35,11 +36,13 @@ DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
 YOLO3_BASE_MODEL_LOAD_FLAG = True
+ALPHA = 0.2
 
 def triplet_loss(y_true, y_pred):
     # Calculate the difference of both face features and judge a same person.
     x = y_pred
-    return K.maximum(K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 64:128], 2.0))) - K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 128:192], 2.0))) + 0.2, 0.)
+    return K.mean(K.maximum(K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 64:128], 2.0), axis=-1)) \
+                     - K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 128:192], 2.0), axis=-1)) + ALPHA, 0.))
                          
 def create_db_fri(raw_data_path, hps):
     """Create db for face re-identifier."""
@@ -148,9 +151,12 @@ class FaceReIdentifier(object):
                 self.hps = hps
                 self.db = pd.read_csv('db.csv')
                 self.db = self.db.iloc[:, 1:]
+
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
                 
-                self.steps = self.hps['step_per_epoch']
-                self.batch_size = len(self.img_triplet_pairs) // self.steps
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1    
             else:    
                 # Create indexing data of positive and negative cases.
                 self.raw_data_path = raw_data_path
@@ -183,8 +189,11 @@ class FaceReIdentifier(object):
                                                    , ex_indexes2[l]
                                                    , np.random.choice(valid_indexes2, size=1)[0])) 
                 
-                self.steps = self.hps['step_per_epoch']
-                self.batch_size = len(self.img_triplet_pairs) // self.steps
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
+                
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1
                 
                 # Shuffle image pairs.
                 shuffle(self.img_triplet_pairs)
@@ -193,32 +202,48 @@ class FaceReIdentifier(object):
                     pickle.dump(self.img_triplet_pairs, f)
                 
         def __len__(self):
-            return self.steps
+            return self.hps['step']
         
         def __getitem__(self, index):
-            # Check the last index.
-            # TODO
-            
             images_a = []
             images_p = []
             images_n = []
             
-            for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
-                # Get the anchor and comparison images.
-                image_a = cv.imread(os.path.join(self.raw_data_path
-                                                 , 'subject_faces'
-                                                 , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
-                image_p = cv.imread(os.path.join(self.raw_data_path
-                                                 , 'subject_faces'
-                                                 , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
-                image_n = cv.imread(os.path.join(self.raw_data_path
-                                                 , 'subject_faces'
-                                                 , self.db.loc[self.img_pairs[bi][1], 'face_file']))
-                
-                images_a.append(image_a/255)
-                images_p.append(image_p/255)
-                images_n.append(image_n/255)
-                                                                                             
+            # Check the last index.
+            if index == (self.hps['step'] - 1):
+                for bi in range(index * self.batch_size, len(self.img_triplet_pairs)):
+                    # Get the anchor and comparison images.
+                    image_a = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)
+            
+            else:
+                for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
+                    # Get the anchor and comparison images.
+                    image_a = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = cv.imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)                 
+                                                                                                                     
             return ({'input_a': np.asarray(images_a)
                      , 'input_p': np.asarray(images_p)
                      , 'input_n': np.asarray(images_n)}
@@ -242,7 +267,17 @@ class FaceReIdentifier(object):
         #trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
         
         if model_loading: 
-            self.model = load_model(os.path.join(self.MODEL_PATH), custom_objects={'triplet_loss': triplet_loss})
+            if MULTI_GPU:
+                self.model = load_model(self.MODEL_PATH, custom_objects={'triplet_loss': triplet_loss})
+                self.parallel_model = multi_gpu_model(self.model, gpus = NUM_GPUS)
+                
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay']) 
+                self.parallel_model.compile(optimizer=opt, loss=triplet_loss)
+            else:
+                self.model = load_model(self.MODEL_PATH, custom_objects={'triplet_loss': triplet_loss})
         else:
             # Design the face re-identification model.
             # Inputs.
@@ -258,10 +293,11 @@ class FaceReIdentifier(object):
             xa = base(input_a) # Non-linear.
             xa = Flatten()(xa)
             
-            c_dense_layer = Dense(self.hps['dense1'], activation='linear', name='dense1')
-            leaky_relu = LeakyReLU(name='leaky_relu')
+            c_dense_layer = Dense(self.hps['dense1'], activation='relu', name='dense1')
+            l2_norm_layer = Lambda(lambda x: K.l2_normalize(x, axis=-1), name='l2_norm_layer')
+            
             xa = c_dense_layer(xa)
-            xa = leaky_relu(xa)
+            xa = l2_norm_layer(xa)
             
             '''
             for i in range(self.hps['num_dense1_layers']):
@@ -271,7 +307,7 @@ class FaceReIdentifier(object):
             xp = base(input_p)
             xp = Flatten()(xp)
             xp = c_dense_layer(xp)
-            xp = leaky_relu(xp)
+            xp = l2_norm_layer(xp)
             
             '''
             for i in range(self.hps['num_dense1_layers']):
@@ -281,7 +317,7 @@ class FaceReIdentifier(object):
             xn = base(input_n)
             xn = Flatten()(xn)
             xn = c_dense_layer(xn)
-            xn = leaky_relu(xn)
+            xn = l2_norm_layer(xn)
             
             '''
             for i in range(self.hps['num_dense1_layers']):
@@ -291,30 +327,40 @@ class FaceReIdentifier(object):
             output = Concatenate(name='output')([xa, xp, xn]) #?
 
             if MULTI_GPU:
-                self.model = multi_gpu_model(Model(inputs=[input_a, input_p, input_n], outputs=[output])
+                self.model = Model(inputs=[input_a, input_p, input_n], outputs=[output])
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay'])
+                
+                self.model.compile(optimizer=opt, loss=triplet_loss)
+                self.model.summary()
+                
+                self.parallel_model = multi_gpu_model(Model(inputs=[input_a, input_p, input_n], outputs=[output])
                                                    , gpus = NUM_GPUS)
+                self.parallel_model.compile(optimizer=opt, loss=triplet_loss)
+                self.parallel_model.summary()
             else:
                 self.model = Model(inputs=[input_a, input_p, input_n], outputs=[output])
-
-            opt = optimizers.Adam(lr=self.hps['lr']
-                                    , beta_1=self.hps['beta_1']
-                                    , beta_2=self.hps['beta_2']
-                                    , decay=self.hps['decay'])
-            
-            self.model.compile(optimizer=opt, loss=triplet_loss)
-            self.model.summary()
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                        , beta_1=self.hps['beta_1']
+                                        , beta_2=self.hps['beta_2']
+                                        , decay=self.hps['decay'])
+                
+                self.model.compile(optimizer=opt, loss=triplet_loss)
+                self.model.summary()
 
         # Create face detector.
         self.fd = FaceDetector(self.raw_data_path, self.hps, True)
         
-        # Make fid extractor and face indentifier.
+        # Make fid extractor and face identifier.
         self._make_fid_extractor()
 
     def _make_fid_extractor(self):
         """Make facial id extractor."""
         # Design the face re-identification model.
         # Inputs.
-        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input')
+        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input1')
  
         # Load yolov3 as the base model.
         base = self.model.get_layer('base')
@@ -329,10 +375,10 @@ class FaceReIdentifier(object):
         '''
         
         x = self.model.get_layer('dense1')(x)
-        x = self.model.get_layer('leaky_relu')(x)
+        x = self.model.get_layer('l2_norm_layer')(x)
         
         facial_id = x
-        self.fid_extractor = Model(inputs=[input], outputs=[facial_id])
+        self.fid_extractor = Model(inputs=[input1], outputs=[facial_id])
     
     @property
     def YOLOV3Base(self):
@@ -556,14 +602,23 @@ class FaceReIdentifier(object):
     def train(self):
         """Train face detector."""
         trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
-            
-        self.model.fit_generator(trGen
-                      , steps_per_epoch=self.hps['step_per_epoch']                  
-                      , epochs=self.hps['epochs']
-                      , verbose=1
-                      , max_queue_size=100
-                      , workers=4
-                      , use_multiprocessing=True)
+        
+        if MULTI_GPU:
+            self.parallel_model.fit_generator(trGen
+                          , steps_per_epoch=self.hps['step']                  
+                          , epochs=self.hps['epochs']
+                          , verbose=1
+                          , max_queue_size=100
+                          , workers=8
+                          , use_multiprocessing=True)
+        else:     
+            self.model.fit_generator(trGen
+                          , steps_per_epoch=self.hps['step']                  
+                          , epochs=self.hps['epochs']
+                          , verbose=1
+                          , max_queue_size=10
+                          , workers=4
+                          , use_multiprocessing=True)
 
         print('Save the model.')            
         self.model.save(self.MODEL_PATH)
@@ -585,6 +640,12 @@ class FaceReIdentifier(object):
             
             for ff in list(df.iloc[:, 1]):
                 image = cv.imread(os.path.join('subject_faces', ff))
+                r = image[:, :, 0].copy()
+                g = image[:, :, 1].copy()
+                b = image[:, :, 2].copy()
+                image[:, :, 0] = b
+                image[:, :, 1] = g
+                image[:, :, 2] = r
                 images.append(image/255)
             
             images = np.asarray(images)
@@ -613,6 +674,12 @@ class FaceReIdentifier(object):
         output_file_path : string
             Output file path.
         """ 
+        if not os.path.isdir(os.path.join(self.raw_data_path, 'results')):
+            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+        else:
+            shutil.rmtree(os.path.join(self.raw_data_path, 'results'))
+            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+        
         gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
@@ -638,17 +705,9 @@ class FaceReIdentifier(object):
                 count1 += 1
                 
                 # Load an image.
-                image = cv.imread(os.path.join(test_path, file_name))
-                image_o_size = (image.shape[0], image.shape[1])
+                image = imread(os.path.join(test_path, file_name))
                 image_o = image.copy()
-                image = image/255
-                
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
+                image = image/255 
              
                 # Adjust the original image size into the normalized image size according to the ratio of width, height.
                 w = image.shape[1]
@@ -687,7 +746,7 @@ class FaceReIdentifier(object):
                 image = image[np.newaxis, :]
                        
                 # Detect faces.
-                boxes = self.fd.detect(image, image_o_size)
+                boxes = self.fd.detect(image)
                 
                 # correct the sizes of the bounding boxes
                 for box in boxes:
@@ -755,19 +814,19 @@ class FaceReIdentifier(object):
                     # Create anchor facial ids.
                     anchor_facial_id = self.fid_extractor.predict(image[np.newaxis, ...])
                     anchor_facial_id = np.squeeze(anchor_facial_id)
-                    anchor_facial_ids = np.asarray([anchor_facial_id for _ in range(len(subject_ids))])
                     
                     # Calculate similarity distances for each registered face ids.
                     sim_dists = []
                     for i in range(len(subject_ids)):
-                        sim_dists.append(norm(anchor_facial_ids[i] - reg_facial_ids[i]))
+                        sim_dists.append(norm(anchor_facial_id - reg_facial_ids[i]))
                     sim_dists = np.asarray(sim_dists)
-                    cand = np.argmax(sim_dists)
+                    cand = np.argmin(sim_dists)
 
                     if sim_dists[cand] > self.hps['sim_th']:
                         continue
                     
-                    subject_id = subject_ids[cand]     
+                    subject_id = subject_ids[cand]
+                    box.subject_id = subject_id     
                     
                     if platform.system() == 'Windows':
                         f.write(file_name.split('\\')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
@@ -777,7 +836,7 @@ class FaceReIdentifier(object):
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 
-                boxes = [box for box in boxes if box.subject_id != -1]
+                #boxes = [box for box in boxes if box.subject_id != -1]
 
                 # Draw bounding boxes of ground truth.
                 if platform.system() == 'Windows':
@@ -785,7 +844,11 @@ class FaceReIdentifier(object):
                 else:
                     file_new_name = file_name.split('/')[-1]
                 
-                df = gt_df_g.get_group(file_new_name)
+                try:
+                    df = gt_df_g.get_group(file_new_name)
+                except KeyError:
+                    continue
+                
                 gt_boxes = []
                 
                 for i in range(df.shape[0]):
@@ -853,17 +916,9 @@ class FaceReIdentifier(object):
                 count1 += 1
                 
                 # Load an image.
-                image = cv.imread(os.path.join(test_path, file_name))
-                image_o_size = (image.shape[0], image.shape[1])
+                image = imread(os.path.join(test_path, file_name))
                 image_o = image.copy()
-                image = image/255
-                
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r 
+                image = image/255 
              
                 # Adjust the original image size into the normalized image size according to the ratio of width, height.
                 w = image.shape[1]
@@ -902,7 +957,7 @@ class FaceReIdentifier(object):
                 image = image[np.newaxis, :]
                        
                 # Detect faces.
-                boxes = self.fd.detect(image, image_o_size)
+                boxes = self.fd.detect(image)
                 
                 # correct the sizes of the bounding boxes
                 for box in boxes:
@@ -979,13 +1034,16 @@ class FaceReIdentifier(object):
                     sim_dists = np.asarray(sim_dists)
                     cand = np.argmin(sim_dists)
 
-                    print(sim_dists[cand] )
                     if sim_dists[cand] > self.hps['sim_th']:
                         continue
                     
                     subject_id = subject_ids[cand]    
                     
-                    f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    if platform.system() == 'Windows':
+                        f.write(file_name.split('\\')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    else:
+                        f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                        
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 
@@ -1019,6 +1077,7 @@ def main(args):
         Arguments
     """
     hps = {}
+    hps['step'] = 1
 
     if args.mode == 'data':
         # Get arguments.
@@ -1050,7 +1109,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1082,7 +1141,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1115,7 +1174,7 @@ def main(args):
         hps['beta_1'] = float(args.beta_1)
         hps['beta_2'] = float(args.beta_2)
         hps['decay'] = float(args.decay)
-        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['batch_size'] = int(args.batch_size)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
         hps['nms_iou_th'] = float(args.nms_iou_th)
@@ -1151,7 +1210,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta_1')
     parser.add_argument('--beta_2')
     parser.add_argument('--decay')
-    parser.add_argument('--step_per_epoch')
+    parser.add_argument('--batch_size')
     parser.add_argument('--epochs')
     parser.add_argument('--face_conf_th')
     parser.add_argument('--nms_iou_th')

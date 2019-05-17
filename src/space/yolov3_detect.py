@@ -132,7 +132,7 @@ class WeightReader:
         self.offset = 0
 
 class BoundBox:
-    def __init__(self, xmin, ymin, xmax, ymax, objness = None, classes = None, anchor = None, subject_id = None):
+    def __init__(self, xmin, ymin, xmax, ymax, objness = None, classes = None, anchor = None, subject_id = -1):
         self.xmin = xmin
         self.ymin = ymin
         self.xmax = xmax
@@ -511,12 +511,11 @@ def draw_boxes_v2(rawImage, boxes, cls_thresh):
         print(str(box.get_score()) + ', ' + str(box.classes[0]) + '\n')
         
         image = copy.copy(image)
-        rr, cc = polygon_perimeter((box.ymin, box.ymin, box.ymax, box.ymax) 
-                                              , (box.xmin, box.xmax, box.xmax, box.xmin), shape = image.shape)
-        set_color(image, (rr, cc), (0,255,0))
         imageObject = Image.fromarray(image, mode='RGB')
         imageDraw = ImageDraw.Draw(imageObject)
-        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), (0, 255, 0))
+        imageDraw.rectangle([box.xmin, box.ymin, box.xmax, box.ymax], outline=(0, 255, 0), width=1)
+        font = ImageFont.truetype('arial.ttf', 25)
+        imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) + ', ' + str(box.classes[0]), fill=(0, 255, 0), font=font)
         image = np.asarray(imageObject)
     
     return image
@@ -528,13 +527,12 @@ def draw_boxes_v3(rawImage, boxes, cls_thresh, color=(0, 255, 0)):
         print(str(box.get_score()) + ', ' + str(box.classes[0]) + '\n')
         
         image = copy.copy(image)
-        rr, cc = polygon_perimeter((box.ymin, box.ymin, box.ymax, box.ymax) 
-                                              , (box.xmin, box.xmax, box.xmax, box.xmin), shape = image.shape)
-        set_color(image, (rr, cc), color)
         imageObject = Image.fromarray(image, mode='RGB')
         imageDraw = ImageDraw.Draw(imageObject)
+        imageDraw.rectangle([box.xmin, box.ymin, box.xmax, box.ymax], outline=color, width=3)
+        font = ImageFont.truetype('arial.ttf', 25)
         imageDraw.text((box.xmin, box.ymin - 13), str(box.get_score()) \
-                       + ', ' + str(box.classes[0]) + ', ' + str(box.subject_id), color)
+                       + ', ' + str(box.classes[0]) + ', ' + str(box.subject_id), fill=color, font=font)
         image = np.asarray(imageObject)
     
     return image 
