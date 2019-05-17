@@ -1,4 +1,4 @@
-# Face recognition Keras model based on yolov3
+# Face recognition Keras model based on yolov3 including face detection and face identification
 ![Imgur](recog_samples/014bf8ede65b5b52ac83f00b7cd6e2f9_detected.jpg)
 ![Imgur](recog_samples/01c2ee2fdfddb91abd41e8b31033d40a_detected.jpg)
 
