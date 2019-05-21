@@ -24,26 +24,19 @@ SOFTWARE.
 '''
 
 import argparse
-import os
+import copy
+import struct
+
 import numpy as np
 from scipy.stats import entropy
-import copy
-import time
+from skimage.io import imread, imsave
+from skimage.transform import resize 
+from skimage.draw import polygon_perimeter, set_color
+from PIL import Image, ImageFont, ImageDraw
 
 from keras.layers import Conv2D, Input, BatchNormalization, LeakyReLU, ZeroPadding2D, UpSampling2D
 from keras.layers.merge import add, concatenate
 from keras.models import Model,load_model
-import struct
-
-from skimage.io import imread, imsave
-from skimage.transform import resize 
-from skimage.draw import polygon_perimeter, set_color
-
-from PIL import Image, ImageFont, ImageDraw
-
-import platform
-import glob
-import pandas as pd
 
 #os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 #os.environ["CUDA_VISIBLE_DEVICES"]="-1"
@@ -131,7 +124,11 @@ class WeightReader:
         self.offset = 0
 
 class BoundBox:
-    def __init__(self, xmin, ymin, xmax, ymax, objness = None, classes = None, anchor = None, subject_id = -1):
+    def __init__(self, xmin, ymin, xmax, ymax
+                 , objness = None
+                 , classes = None
+                 , anchor = None
+                 , subject_id = -1):
         self.xmin = xmin
         self.ymin = ymin
         self.xmax = xmax
@@ -156,14 +153,8 @@ class BoundBox:
             self.score = self.classes[self.get_label()]
             
         return np.min([self.score, 1.0])
-    
-    def get_relative_100_pos(self, width, height):
-        left = int(self.xmin/width * 100.)
-        top = int(self.ymin/height * 100.)
         
-        return (left, top)
-    
-    def get_relative_100_boundary_box(self, width, height):
+    def get_relative_bb(self, width, height):
         left = int(self.xmin/width * 100.)
         top = int(self.ymin/height * 100.)
         width = int((self.xmax - self.xmin)/width * 100.)
@@ -352,7 +343,7 @@ def decode_netout(netout, anchors, anchor_idx, obj_thresh, net_h, net_w):
     netout[..., :2]  = _sigmoid(netout[..., :2])
     netout[..., 4:]  = _sigmoid(netout[..., 4:])
     #netout[..., 5:]  = netout[..., 4][..., np.newaxis] * netout[..., 5:]
-#    netout[..., 5:] *= netout[..., 5:] > cls_thresh
+    #netout[..., 5:] *= netout[..., 5:] > cls_thresh
 
     for i in range(grid_h*grid_w):
         row = int(i / grid_w)
@@ -514,7 +505,9 @@ def draw_boxes_v2(rawImage, boxes, cls_thresh):
         imageDraw = ImageDraw.Draw(imageObject)
         imageDraw.rectangle([box.xmin, box.ymin, box.xmax, box.ymax], outline=(0, 255, 0), width=1)
         font = ImageFont.truetype('arial.ttf', 25)
-        imageDraw.text((box.xmin , box.ymin - 20), str(box.get_score()) + ', ' + str(box.classes[0]), fill=(0, 255, 0), font=font)
+        imageDraw.text((box.xmin , box.ymin - 20)
+                       , str(box.get_score()) + ', ' + str(box.classes[0])
+                       , fill=(0, 255, 0), font=font)
         image = np.asarray(imageObject)
     
     return image
@@ -537,10 +530,7 @@ def draw_boxes_v3(rawImage, boxes, cls_thresh, color=(0, 255, 0)):
     return image 
 
 def get_person_boxes(boxes, labels, cls_thresh, human_entropy_thresh, bottle_entropy_thresh):
-    '''
-        Get person boxes.
-    '''
-    
+    """Get person boxes."""
     person_boxes = list()
     person_index = labels.index('person')
     bottle_index = labels.index('bottle')
@@ -580,7 +570,7 @@ def _main_(args):
               "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
 
     if keras_model_load_flag == True:
-        yolov3 = load_model('yolov3_model.hd5')
+        yolov3 = load_model('yolov3_model.h5')
     else:
         
         # make the yolov3 model to predict 80 classes on COCO
@@ -592,7 +582,7 @@ def _main_(args):
 
     # Save the model.
     if keras_model_save_flag == True:
-        yolov3.save('yolov3_model.hd5')
+        yolov3.save('yolov3_model.h5')
 
     # preprocess the image
     image = imread(image_path)
@@ -618,155 +608,7 @@ def _main_(args):
  
     # write the image with bounding boxes to file
     imsave(image_path[:-5] + '_detected' + image_path[-5:], (image).astype('uint8')) 
-
-class YOLOV3(object):
-    def __init__(self):
-        '''
-            Constructor.
-        '''
-        
-        # Initialize.
-        self.net_h, self.net_w = 416, 416
-        #self.net_h, self.net_w = 256, 256
-        #self.net_h, self.net_w = 128, 128
-        self.anchors = [[116,90,  156,198,  373,326],  [30,61, 62,45,  59,119], [10,13,  16,30,  33,23]]
-        #self.anchors = [[58,45, 78,99, 186,163], [15,30,  31,22,  29,59], [5,6, 8,15, 16,11]]
-        #self.anchors = [[29,22,  39,49,  93,81],  [7,15, 15,11,  14,29], [2,3,  4,7,  8,5]]
-        self.labels = ["person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", \
-              "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", \
-              "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", \
-              "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", \
-              "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", \
-              "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", \
-              "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", \
-              "chair", "sofa", "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", \
-              "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", \
-              "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
-
-        self.yolov3 = load_model('yolov3_model.hd5')
-    
-    def detect_object(self, image_path, obj_thresh, cls_thresh, nms_thresh, human_entropy_thresh, bottle_entropy_thresh):
-        net_h, net_w = self.net_h, self.net_w
-        anchors = self.anchors
-        labels = self.labels
-        yolov3 = self.yolov3
-    
-        # preprocess the image
-        image = imread(image_path)
-        image_h, image_w, _ = image.shape
-        new_image = preprocess_input(image, net_h, net_w)
-
-        # run the prediction
-        yolos = yolov3.predict(new_image)
-        boxes = []
-
-        for i in range(len(yolos)):
-            # decode the output of the network
-            boxes += decode_netout(yolos[i][0], anchors[i], i, obj_thresh, net_h, net_w)
-        
-        # correct the sizes of the bounding boxes
-        correct_yolo_boxes(boxes, image_h, image_w, net_h, net_w)
-
-        # suppress non-maximal boxes
-        do_nms(boxes, nms_thresh)     
-
-        # filter persons.
-        boxes = get_person_boxes(boxes, labels, cls_thresh, human_entropy_thresh, bottle_entropy_thresh)
- 
-        # draw bounding boxes on the image using labels
-        image = draw_boxes(image, boxes, labels, cls_thresh)
-        
-        # write the image with bounding boxes to file
-        imsave(image_path[:-5] + '_detected' + image_path[-5:], (image).astype('uint8'))
-        
-        return image, boxes
-    
-    def detect_person(self, image, obj_thresh, cls_thresh, nms_thresh, human_entropy_thresh, bottle_entropy_thresh):
-        net_h, net_w = self.net_h, self.net_w
-        anchors = self.anchors
-        labels = self.labels
-        yolov3 = self.yolov3
-    
-        # preprocess the image
-        image_h, image_w, _ = image.shape
-        new_image = preprocess_input(image, net_h, net_w)
-
-        # run the prediction
-        yolos = yolov3.predict(new_image) # Prediction time?
-        boxes = []
-
-        for i in range(len(yolos)):
-            # decode the output of the network
-            boxes += decode_netout(yolos[i][0], anchors[i], i, obj_thresh, net_h, net_w)
-
-        # correct the sizes of the bounding boxes
-        correct_yolo_boxes(boxes, image_h, image_w, net_h, net_w)
-
-        # suppress non-maximal boxes
-        do_nms(boxes, nms_thresh)     
-
-        # filter persons.
-        person_boxes = get_person_boxes(boxes, labels, cls_thresh, human_entropy_thresh, bottle_entropy_thresh)
-
-        # draw bounding boxes on the image using labels
-        image = draw_boxes(image, person_boxes, labels, cls_thresh)
-        
-        # write the image with bounding boxes to file
-        #skimage.io.imsave(image_path[:-5] + '_detected' + image_path[-5:], (image).astype('uint8'))
-        
-        return person_boxes    
-
-def detect_sample_data(rawDataPath):
-        
-    # Save images for each smaple video.
-    '''
-    videoNames = glob.glob(os.path.join(rawDataPath, '*.mov')) + glob.glob(os.path.join(rawDataPath, '*.avi'))
-    imageNames = []
-    
-    for videoName in videoNames:
-        video = VideoFileClip(videoName)
-        
-        if platform.system() == 'Windows':
-            imageNamesUnit = video.write_images_sequence(os.path.join(rawDataPath
-                                                                  , 'images'
-                                                                  , videoName.split('\\')[-1].split('.')[0] + '%06d.jpeg'), fps=1)
-        else:
-            imageNamesUnit = video.write_images_sequence(os.path.join(rawDataPath
-                                                                  , 'images'
-                                                                  , videoName.split('/')[-1].split('.')[0] + '%06d.jpeg'), fps=1)
-        
-        imageNames += imageNamesUnit
-        
-        video.close()
-    '''
-    
-    # Detect objects.
-    yolov3 = YOLOV3()
-    obj_thresh, cls_thresh, nms_thresh, human_entropy_thresh, bottle_entropy_thresh = 0.0001, 0.3, 0.3, 0.1, 0.6
-    
-    imageNames = glob.glob(os.path.join(rawDataPath, 'images', '*.jpeg'))
-    imageNames = imageNames[0:]
-    
-    # Deleted previous detection images.
-    if platform.system() == 'Windows':
-        #os.system('del D:\\topcoder\\titan_eye_ped\\resource\\raw_data\\sample-data\\images\\*detected.jpeg')
-        #time.sleep(10)
-        os.system('del D:\\topcoder\\titan_eye_ped\\resource\\raw_data\\training\\images\\*detected.jpeg') #?
-    else:
-        pass
-    
-    for image_path in imageNames:
-        print(image_path)
-        ft = time.time()
-        yolov3.detect_object(image_path, obj_thresh, cls_thresh, nms_thresh, human_entropy_thresh, bottle_entropy_thresh)
-        et = time.time()
-        
-        print('Processing time: {0:f}'.format(et-ft)) #str(pd.Timestamp(pd.Timestamp("2000").timestamp() + int(et - ft), unit='s')).split(' ')[-1]))        
         
 if __name__ == '__main__':
-    #args = argparser.parse_args()
-    #_main_(args)
-    
-    #rawDataPath = 'D:\\topcoder\\titan_eye_ped\\resource\\raw_data\\sample-data'
-    rawDataPath = 'D:\\topcoder\\titan_eye_ped\\resource\\raw_data\\training'
-    detect_sample_data(rawDataPath)
+    args = argparser.parse_args()
+    _main_(args)

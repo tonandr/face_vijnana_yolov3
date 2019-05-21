@@ -41,10 +41,9 @@ import cv2 as cv
 from skimage.io import imread, imsave
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU
-from keras.layers.merge import add, concatenate
+from keras.layers import Input, Conv2D, ZeroPadding2D, LeakyReLU
+from keras.layers.merge import add
 from keras.utils import multi_gpu_model
-import keras.backend as K
 from keras import optimizers
 from keras.utils.data_utils import Sequence
 
@@ -55,9 +54,9 @@ from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, 
 
 # Constants.
 DEBUG = True
-MULTI_GPU = True
+MULTI_GPU = False
 NUM_GPUS = 4
-YOLO3_BASE_MODEL_LOAD_FLAG = False
+YOLO3_BASE_MODEL_LOAD_FLAG = True
 
 RATIO_TH = 0.8
 
@@ -605,7 +604,7 @@ class FaceDetector(object):
                       , epochs=self.hps['epochs']
                       , verbose=1
                       , max_queue_size=100
-                      , workers=8
+                      , workers=4
                       , use_multiprocessing=True)
         else:
             self.model.fit_generator(tr_gen
@@ -723,7 +722,11 @@ class FaceDetector(object):
                     if count > 60:
                         break
                     
-                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    if platform.system() == 'Windows':
+                        f.write(file_name.split('\\')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    else:
+                        f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                        
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 
@@ -790,7 +793,6 @@ class FaceDetector(object):
                 # Load an image.
                 image = imread(os.path.join(test_path, file_name))
                 image = image/255
-                image_o = image.copy() 
                 
                 # Adjust the original image size into the normalized image size according to the ratio of width, height.
                 w = image.shape[1]
@@ -849,9 +851,9 @@ class FaceDetector(object):
                     r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
                     
                     if r_wh < RATIO_TH:
-                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
+                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin #?
                     elif r_hw < RATIO_TH:
-                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin #?
                     
                     # Scale ?
                     # TODO
@@ -862,7 +864,11 @@ class FaceDetector(object):
                     if count > 60:
                         break
                     
-                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    if platform.system() == 'Windows':
+                        f.write(file_name.split('\\')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    else:
+                        f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
                     count +=1
 

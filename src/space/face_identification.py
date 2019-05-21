@@ -35,12 +35,12 @@ import time
 import pickle
 import platform
 import shutil
+from random import shuffle
 
 import numpy as np
 import pandas as pd
 import cv2 as cv
 from skimage.io import imread, imsave
-from scipy.stats import entropy
 from scipy.linalg import norm
 
 from keras.models import Model, load_model
@@ -51,15 +51,14 @@ from keras.utils.data_utils import Sequence
 import keras.backend as K
 from keras import optimizers
 
-from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
+from yolov3_detect import make_yolov3_model, BoundBox, WeightReader, draw_boxes_v3
 from face_detection import FaceDetector
-from random import shuffle
 
 # Constants.
 DEBUG = True
-MULTI_GPU = True
+MULTI_GPU = False
 NUM_GPUS = 4
-YOLO3_BASE_MODEL_LOAD_FLAG = False
+YOLO3_BASE_MODEL_LOAD_FLAG = True
 ALPHA = 0.2
 
 def triplet_loss(y_true, y_pred):
@@ -68,8 +67,8 @@ def triplet_loss(y_true, y_pred):
     return K.mean(K.maximum(K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 64:128], 2.0), axis=-1)) \
                      - K.sqrt(K.sum(K.pow(x[:, 0:64] - x[:, 128:192], 2.0), axis=-1)) + ALPHA, 0.))
                          
-def create_db_fri(raw_data_path, hps):
-    """Create db for face re-identifier."""
+def create_db_fi(raw_data_path, hps):
+    """Create db for face identifier."""
     if not os.path.isdir(os.path.join('subject_faces')):
         os.mkdir(os.path.join('subject_faces'))
     else:
@@ -162,10 +161,10 @@ def create_db_fri(raw_data_path, hps):
     # Save db.
     db.to_csv('db.csv')
             
-class FaceReIdentifier(object):
-    """Face re-identifier to use yolov3."""
+class FaceIdentifier(object):
+    """Face identifier to use yolov3."""
     # Constants.
-    MODEL_PATH = 'face_reidentifier.h5'
+    MODEL_PATH = 'face_identifier.h5'
 
     class TrainingSequence(Sequence):
         """Training data set sequence."""
@@ -288,7 +287,7 @@ class FaceReIdentifier(object):
         hps : dictionary
             Hyper-parameters
         model_loading : boolean 
-            Face re-identification model loading flag
+            Face identification model loading flag
         """
         # Initialize.
         self.raw_data_path = raw_data_path
@@ -309,7 +308,7 @@ class FaceReIdentifier(object):
             else:
                 self.model = load_model(self.MODEL_PATH, custom_objects={'triplet_loss': triplet_loss})
         else:
-            # Design the face re-identification model.
+            # Design the face identification model.
             # Inputs.
             input_a = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_a')
             input_p = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input_p')
@@ -388,7 +387,7 @@ class FaceReIdentifier(object):
 
     def _make_fid_extractor(self):
         """Make facial id extractor."""
-        # Design the face re-identification model.
+        # Design the face identification model.
         # Inputs.
         input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3), name='input1')
  
@@ -669,13 +668,7 @@ class FaceReIdentifier(object):
             images = []
             
             for ff in list(df.iloc[:, 1]):
-                image = cv.imread(os.path.join('subject_faces', ff))
-                r = image[:, :, 0].copy()
-                g = image[:, :, 1].copy()
-                b = image[:, :, 2].copy()
-                image[:, :, 0] = b
-                image[:, :, 1] = g
-                image[:, :, 2] = r
+                image = imread(os.path.join('subject_faces', ff))
                 images.append(image/255)
             
             images = np.asarray(images)
@@ -852,8 +845,8 @@ class FaceReIdentifier(object):
                     sim_dists = np.asarray(sim_dists)
                     cand = np.argmin(sim_dists)
 
-                    #if sim_dists[cand] > self.hps['sim_th']:
-                    #    continue
+                    if sim_dists[cand] > self.hps['sim_th']:
+                        continue
                     
                     subject_id = subject_ids[cand]
                     box.subject_id = subject_id     
@@ -898,11 +891,13 @@ class FaceReIdentifier(object):
                 if len(gt_boxes) == 0 or len(boxes) == 0: #?
                     continue
                     
-                image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th'], color=(255, 0, 0)) 
+                image1 = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th'], color=(255, 0, 0)) 
+                del image_o
 
                 # Draw bounding boxes on the image using labels.
-                image = draw_boxes_v3(image, boxes, self.hps['face_conf_th'], color=(0, 255, 0)) 
-         
+                image = draw_boxes_v3(image1, boxes, self.hps['face_conf_th'], color=(0, 255, 0)) 
+                del image1
+                
                 # Write the image with bounding boxes to file.
                 # Draw bounding boxes of ground truth.
                 if platform.system() == 'Windows':
@@ -1121,7 +1116,7 @@ def main(args):
              
         # Create db.
         ts = time.time()
-        create_db_fri(raw_data_path, hps)
+        create_db_fi(raw_data_path, hps)
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))            
@@ -1148,11 +1143,11 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Train.
-        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        fi = FaceIdentifier(raw_data_path, hps, model_loading)
         
         ts = time.time()
-        fr.train()
-        fr.register_facial_ids()
+        fi.train()
+        fi.register_facial_ids()
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
@@ -1181,11 +1176,11 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Test.
-        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        fi = FaceIdentifier(raw_data_path, hps, model_loading)
         
         ts = time.time()
-        #fr.register_facial_ids()
-        fr.evaluate(raw_data_path, output_file_path)
+        #fi.register_facial_ids()
+        fi.evaluate(raw_data_path, output_file_path)
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
@@ -1214,11 +1209,11 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Test.
-        fr = FaceReIdentifier(raw_data_path, hps, model_loading)
+        fi = FaceIdentifier(raw_data_path, hps, model_loading)
         
         ts = time.time()
-        #fr.register_facial_ids()
-        fr.test(raw_data_path, output_file_path)
+        #fi.register_facial_ids()
+        fi.test(raw_data_path, output_file_path)
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
