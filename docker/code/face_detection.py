@@ -8,6 +8,7 @@ import os
 import glob
 import argparse
 import time
+import platform
 
 import numpy as np
 import pandas as pd
@@ -19,15 +20,21 @@ from keras.layers import Input, Dense, Conv2D, Lambda, ZeroPadding2D, LeakyReLU
 from keras.layers.merge import add, concatenate
 from keras.utils import multi_gpu_model
 import keras.backend as K
-
-from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
+from keras import optimizers
 from keras.utils.data_utils import Sequence
-#from space.yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2
+
+from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
+
+#os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
+#os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
 # Constants.
 DEBUG = True
 MULTI_GPU = False
 NUM_GPUS = 4
+YOLO3_BASE_MODEL_LOAD_FLAG = True
+
+RATIO_TH = 0.8
 
 class FaceDetector(object):
     """Face detector to use yolov3."""
@@ -77,8 +84,13 @@ class FaceDetector(object):
                                                    , gpus = NUM_GPUS)
             else:
                 self.model = Model(inputs=[input], outputs=[output])
+
+            opt = optimizers.Adam(lr=self.hps['lr']
+                                    , beta_1=self.hps['beta_1']
+                                    , beta_2=self.hps['beta_2']
+                                    , decay=self.hps['decay'])
             
-            self.model.compile(optimizer='adam', loss='mse') #?
+            self.model.compile(optimizer=opt, loss='mse')
             self.model.summary()
 
     @property
@@ -90,6 +102,10 @@ class FaceDetector(object):
         Model of Keras
             Partial yolo3 model from the input layer to the add_23 layer
         """
+        if YOLO3_BASE_MODEL_LOAD_FLAG:
+            base = load_model('yolov3_base.hd5')
+            return base
+
         yolov3 = make_yolov3_model()
 
         # Load the weights.
@@ -289,6 +305,8 @@ class FaceDetector(object):
         
         output = x
         base = Model(inputs=[input], outputs=[output])
+        base.save('yolov3_base.hd5')
+        
         return base
 
     def train(self):
@@ -306,10 +324,10 @@ class FaceDetector(object):
                       , use_multiprocessing=True)
         
         print('Save the model.')            
-        self.model.save(self.MODEL_FILE_NAME)        
-        
-    def test(self, test_path, output_file_path):
-        """Test.
+        self.model.save(self.MODEL_FILE_NAME)
+    
+    def evaluate(self, test_path, output_file_path):
+        """Evaluate.
         
         Parameters
         ----------
@@ -318,18 +336,23 @@ class FaceDetector(object):
         output_file_path : string
             Output file path.
         """
+        gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
+        gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
-                
+        ratios = []        
         # Detect faces and save results.
+        count1 = 1
         with open(output_file_path, 'w') as f:
-            for file_name in file_names:
-                if DEBUG: print(file_name)
+            for file_name in file_names:          
+                if DEBUG: print(count1, '/', len(file_names), file_name)
+                count1 += 1
                 
                 # Load an image.
                 image = cv.imread(os.path.join(test_path, file_name))
                 image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
-                
+                image = image/255
+                                    
                 r = image[:, :, 0].copy()
                 g = image[:, :, 1].copy()
                 b = image[:, :, 2].copy()
@@ -388,6 +411,18 @@ class FaceDetector(object):
                         box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
                         box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
                         box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+
+                    # Correct image ratio.
+                    r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
+                    r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
+                    
+                    if r_wh < RATIO_TH:
+                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
+                    elif r_hw < RATIO_TH:
+                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                    
+                    # Scale ?
+                    # TODO
                         
                 count = 1
                 
@@ -403,12 +438,162 @@ class FaceDetector(object):
                 if len(boxes) == 0:
                     continue
 
-                # draw bounding boxes on the image using labels.
-#                image = draw_boxes_v2(image_o, boxes, self.hps['face_conf_th']) 
+                # Draw bounding boxes of ground truth.
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                else:
+                    file_new_name = file_name.split('/')[-1]
+                
+                df = gt_df_g.get_group(file_new_name)
+                gt_boxes = []
+                
+                for i in range(df.shape[0]):
+                    # Check exception.
+                    res = gt_df.iloc[i, 3:] > 0
+                    if res.all() == False:
+                        continue
+                    
+                    xmin = int(df.iloc[i, 3])
+                    xmax = int(xmin + df.iloc[i, 5] - 1)
+                    ymin = int(df.iloc[i, 4])
+                    ymax = int(ymin + df.iloc[i, 6] - 1)                    
+                    gt_box = BoundBox(xmin, ymin, xmax, ymax, objness=1., classes=[1.0])
+                    gt_boxes.append(gt_box)
+                    ratios.append((xmax - xmin) / (ymax - ymin))
+                    
+                image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th']) 
+                
+                # Draw bounding boxes on the image using labels.
+                image = draw_boxes_v2(image, boxes, self.hps['face_conf_th']) 
          
-                # write the image with bounding boxes to file.
-#               print('Save ' + file_name[:-4] + '_detected' + file_name[-4:])
-#                imsave(file_name[:-4] + '_detected' + file_name[-4:], (image).astype('uint8'))
+                # Write the image with bounding boxes to file.
+                file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))                
+        
+        ratios = pd.DataFrame({'ratio': ratios})
+        ratios.to_csv('ratios.csv')
+        
+    def test(self, test_path, output_file_path):
+        """Test.
+        
+        Parameters
+        ----------
+        test_path : string
+            Testing directory.
+        output_file_path : string
+            Output file path.
+        """
+        file_names = glob.glob(os.path.join(test_path, '*.jpg'))
+                
+        # Detect faces and save results.
+        count1 = 1
+        with open(output_file_path, 'w') as f:
+            for file_name in file_names:
+                if DEBUG: print(count1, '/', len(file_names), file_name)
+                count1 += 1
+                
+                # Load an image.
+                image = cv.imread(os.path.join(test_path, file_name))
+                image = image/255
+                image_o_size = (image.shape[0], image.shape[1])
+                image_o = image.copy() 
+                
+                r = image[:, :, 0].copy()
+                g = image[:, :, 1].copy()
+                b = image[:, :, 2].copy()
+                image[:, :, 0] = b
+                image[:, :, 1] = g
+                image[:, :, 2] = r 
+             
+                # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                w = image.shape[1]
+                h = image.shape[0]
+                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                
+                if w >= h:
+                    w_p = self.hps['image_size']
+                    h_p = int(h / w * self.hps['image_size'])
+                    pad = self.hps['image_size'] - h_p
+                    
+                    if pad % 2 == 0:
+                        pad_t = pad // 2
+                        pad_b = pad // 2
+                    else:
+                        pad_t = pad // 2
+                        pad_b = pad // 2 + 1
+    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                else:
+                    h_p = self.hps['image_size']
+                    w_p = int(w / h * self.hps['image_size'])
+                    pad = self.hps['image_size'] - w_p
+                    
+                    if pad % 2 == 0:
+                        pad_l = pad // 2
+                        pad_r = pad // 2
+                    else:
+                        pad_l = pad // 2
+                        pad_r = pad // 2 + 1                
+                    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
+                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+       
+                image = image[np.newaxis, :]
+                       
+                # Detect faces.
+                boxes = self.detect(image, image_o_size)
+                
+                # Correct the sizes of the bounding boxes
+                for box in boxes:
+                    if w >= h:
+                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                    else:
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                    
+                    # Correct image ratio.
+                    r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
+                    r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
+                    
+                    if r_wh < RATIO_TH:
+                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
+                    elif r_hw < RATIO_TH:
+                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                    
+                    # Scale ?
+                    # TODO
+                    
+                count = 1
+                
+                for box in boxes:
+                    if count > 60:
+                        break
+                    
+                    f.write(file_name.split('/')[-1] + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                    f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
+                    count +=1
+
+                # Check exception.
+                if len(boxes) == 0:
+                    continue
+
+                # Write the image with bounding boxes to file.
+                '''
+                if platform.system() == 'Windows':
+                    file_new_name = file_name.split('\\')[-1]
+                    file_new_name = file_name[:-4] + '_detected' + file_name[-4:]
+                
+                print(file_new_name)
+                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+                '''
     
     class TrainingSequence(Sequence):
         """Training data set sequence."""
@@ -443,6 +628,7 @@ class FaceDetector(object):
                 
                 # Load an image.
                 image = cv.imread(os.path.join(self.raw_data_path, file_name))
+                image = image/255
                                         
                 r = image[:, :, 0].copy()
                 g = image[:, :, 1].copy()
@@ -489,6 +675,11 @@ class FaceDetector(object):
                 gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
                 
                 for i in range(df.shape[0]):
+                    # Check exception.
+                    res = df.iloc[i, 3:] > 0
+                    if res.all() == False:
+                        continue
+                
                     # Calculate a target feature tensor according to the ratio of width, height.
                     # Calculate a transformed raw bound box.
                     #print(df.columns)
@@ -865,6 +1056,10 @@ def main(args):
         # hps.
         hps['image_size'] = int(args.image_size)    
         hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
         hps['step_per_epoch'] = int(args.step_per_epoch)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
@@ -881,6 +1076,33 @@ def main(args):
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
+    elif args.mode == 'evaluate':
+        # Get arguments.
+        raw_data_path = args.raw_data_path
+        output_file_path = args.output_file_path
+      
+        # hps.
+        hps['image_size'] = int(args.image_size) 
+        hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
+        hps['step_per_epoch'] = int(args.step_per_epoch)
+        hps['epochs'] = int(args.epochs) 
+        hps['face_conf_th'] = float(args.face_conf_th)
+        hps['nms_iou_th'] = float(args.nms_iou_th)
+        hps['num_cands'] = int(args.num_cands)
+        
+        model_loading = False if int(args.model_loading) == 0 else True        
+        
+        fd = FaceDetector(raw_data_path, hps, True)
+        
+        ts = time.time()
+        fd.evaluate(raw_data_path, output_file_path)
+        te = time.time()
+        
+        print('Elasped time: {0:f}s'.format(te-ts))
     elif args.mode == 'test':
         # Get arguments.
         raw_data_path = args.raw_data_path
@@ -889,6 +1111,10 @@ def main(args):
         # hps.
         hps['image_size'] = int(args.image_size) 
         hps['num_filters'] = int(args.num_filters)
+        hps['lr'] = float(args.lr)
+        hps['beta_1'] = float(args.beta_1)
+        hps['beta_2'] = float(args.beta_2)
+        hps['decay'] = float(args.decay)
         hps['step_per_epoch'] = int(args.step_per_epoch)
         hps['epochs'] = int(args.epochs) 
         hps['face_conf_th'] = float(args.face_conf_th)
@@ -898,7 +1124,7 @@ def main(args):
         model_loading = False if int(args.model_loading) == 0 else True        
         
         # Test.
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+        fd = FaceDetector(raw_data_path, hps, True)
         
         ts = time.time()
         fd.test(raw_data_path, output_file_path)
@@ -916,6 +1142,10 @@ if __name__ == '__main__':
     parser.add_argument('--output_file_path')
     parser.add_argument('--image_size')
     parser.add_argument('--num_filters')
+    parser.add_argument('--lr')
+    parser.add_argument('--beta_1')
+    parser.add_argument('--beta_2')
+    parser.add_argument('--decay')
     parser.add_argument('--step_per_epoch')
     parser.add_argument('--epochs')
     parser.add_argument('--face_conf_th')

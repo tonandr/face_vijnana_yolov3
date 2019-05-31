@@ -1,0 +1,58 @@
+{
+	"fd_conf": {
+		"mode": "test",
+		"raw_data_path": "D:\\topcoder\\face_recog\\resource",
+		"test_path": "D:\\topcoder\\face_recog\\resource\\validation",
+		"output_file_path": "solution_fd.csv",
+		"multi_gpu": false,
+		"num_gpus": 4,
+		"yolov3_base_model_load": true,
+		"hps": {
+			"lr": 0.001,
+			"beta_1": 0.99,
+			"beta_2": 0.99,
+			"decay": 0.0,
+			"epochs": 1,
+			"step": 1,
+			"batch_size": 1,
+			"face_conf_th": 0.5,
+			"nms_iou_th": 0.5,
+			"num_cands": 60,
+			"face_region_ratio_th": 0.8
+		},
+			
+		"nn_arch": {
+			"image_size": 416,
+			"bb_info_c_size": 6
+		},
+			
+		"model_loading": true
+	},
+	
+	"fi_conf": {
+		"mode": "fid_db",
+		"raw_data_path": "D:\\topcoder\\face_recog\\resource",
+		"test_path": "D:\\topcoder\\face_recog\\resource\\training",
+		"output_file_path": "solution_fi.csv",
+		"multi_gpu": false,
+		"num_gpus": 4,
+		"yolov3_base_model_load": false,
+		"hps": {
+			"lr": 0.001,
+			"beta_1": 0.99,
+			"beta_2": 0.99,
+			"decay": 0.0,
+			"epochs": 1,
+			"step": 1,
+			"batch_size": 1,
+			"sim_th": 0.7
+		},
+			
+		"nn_arch": {
+			"image_size": 416,
+			"dense1_dim": 64
+		},
+			
+		"model_loading": true
+	}
+}

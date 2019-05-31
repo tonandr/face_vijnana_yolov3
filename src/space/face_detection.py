@@ -30,10 +30,10 @@ Created on Apr 5, 2019
 
 import os
 import glob
-import argparse
 import time
 import platform
 import shutil
+import json
 
 import numpy as np
 import pandas as pd
@@ -41,11 +41,12 @@ import cv2 as cv
 from skimage.io import imread, imsave
 
 from keras.models import Model, load_model
-from keras.layers import Input, Conv2D, ZeroPadding2D, LeakyReLU
+from keras.layers import Input, Conv2D, ZeroPadding2D, LeakyReLU, Lambda, Concatenate
 from keras.layers.merge import add
 from keras.utils import multi_gpu_model
 from keras import optimizers
 from keras.utils.data_utils import Sequence
+from keras import backend as K
 
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
 
@@ -54,14 +55,16 @@ from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, 
 
 # Constants.
 DEBUG = True
-MULTI_GPU = False
-NUM_GPUS = 4
-YOLO3_BASE_MODEL_LOAD_FLAG = True
 
-RATIO_TH = 0.8
+def fd_loss(y_true, y_pred):
+    l2_loss = K.mean(K.sqrt((K.pow(y_true[..., :5] - y_pred[..., :5], 2.0))))
+    ce_loss = K.binary_crossentropy(y_true[..., 5], y_pred[..., 5])
+    loss = l2_loss + ce_loss # Weight?
+    return loss 
 
 class FaceDetector(object):
     """Face detector to use yolov3."""
+    
     # Constants.
     MODEL_PATH = 'face_detector.h5'
     OUTPUT_FILE_NAME = 'solution.csv'
@@ -113,9 +116,9 @@ class FaceDetector(object):
                     pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
                                     
                     if w >= h:
-                        w_p = self.hps['image_size']
-                        h_p = int(h / w * self.hps['image_size'])
-                        pad = self.hps['image_size'] - h_p
+                        w_p = self.nn_arch['image_size']
+                        h_p = int(h / w * self.nn_arch['image_size'])
+                        pad = self.nn_arch['image_size'] - h_p
                         
                         if pad % 2 == 0:
                             pad_t = pad // 2
@@ -127,9 +130,9 @@ class FaceDetector(object):
                         image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
                         image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
                     else:
-                        h_p = self.hps['image_size']
-                        w_p = int(w / h * self.hps['image_size'])
-                        pad = self.hps['image_size'] - w_p
+                        h_p = self.nn_arch['image_size']
+                        w_p = int(w / h * self.nn_arch['image_size'])
+                        pad = self.nn_arch['image_size'] - w_p
                         
                         if pad % 2 == 0:
                             pad_l = pad // 2
@@ -161,15 +164,15 @@ class FaceDetector(object):
                         hb = y2 - y1 + 1
                         
                         if w >= h:
-                            x1_p = int(x1 / w * self.hps['image_size'])
-                            y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                            x2_p = int(x2 / w * self.hps['image_size'])
-                            y2_p = int(y2 / w * self.hps['image_size']) + pad_t
+                            x1_p = int(x1 / w * self.nn_arch['image_size'])
+                            y1_p = int(y1 / w * self.nn_arch['image_size']) + pad_t
+                            x2_p = int(x2 / w * self.nn_arch['image_size'])
+                            y2_p = int(y2 / w * self.nn_arch['image_size']) + pad_t
                         else:
-                            x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                            y1_p = int(y1 / h * self.hps['image_size'])
-                            x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                            y2_p = int(y2 / h * self.hps['image_size'])                   
+                            x1_p = int(x1 / h * self.nn_arch['image_size']) + pad_l
+                            y1_p = int(y1 / h * self.nn_arch['image_size'])
+                            x2_p = int(x2 / h * self.nn_arch['image_size']) + pad_l
+                            y2_p = int(y2 / h * self.nn_arch['image_size'])                   
                         
                         # Calculate a cell position.
                         xc_p = (x1_p + x2_p) // 2
@@ -216,9 +219,9 @@ class FaceDetector(object):
                     pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
                                     
                     if w >= h:
-                        w_p = self.hps['image_size']
-                        h_p = int(h / w * self.hps['image_size'])
-                        pad = self.hps['image_size'] - h_p
+                        w_p = self.nn_arch['image_size']
+                        h_p = int(h / w * self.nn_arch['image_size'])
+                        pad = self.nn_arch['image_size'] - h_p
                         
                         if pad % 2 == 0:
                             pad_t = pad // 2
@@ -230,9 +233,9 @@ class FaceDetector(object):
                         image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
                         image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
                     else:
-                        h_p = self.hps['image_size']
-                        w_p = int(w / h * self.hps['image_size'])
-                        pad = self.hps['image_size'] - w_p
+                        h_p = self.nn_arch['image_size']
+                        w_p = int(w / h * self.nn_arch['image_size'])
+                        pad = self.nn_arch['image_size'] - w_p
                         
                         if pad % 2 == 0:
                             pad_l = pad // 2
@@ -264,15 +267,15 @@ class FaceDetector(object):
                         hb = y2 - y1 + 1
                         
                         if w >= h:
-                            x1_p = int(x1 / w * self.hps['image_size'])
-                            y1_p = int(y1 / w * self.hps['image_size']) + pad_t
-                            x2_p = int(x2 / w * self.hps['image_size'])
-                            y2_p = int(y2 / w * self.hps['image_size']) + pad_t
+                            x1_p = int(x1 / w * self.nn_arch['image_size'])
+                            y1_p = int(y1 / w * self.nn_arch['image_size']) + pad_t
+                            x2_p = int(x2 / w * self.nn_arch['image_size'])
+                            y2_p = int(y2 / w * self.nn_arch['image_size']) + pad_t
                         else:
-                            x1_p = int(x1 / h * self.hps['image_size']) + pad_l
-                            y1_p = int(y1 / h * self.hps['image_size'])
-                            x2_p = int(x2 / h * self.hps['image_size']) + pad_l
-                            y2_p = int(y2 / h * self.hps['image_size'])                   
+                            x1_p = int(x1 / h * self.nn_arch['image_size']) + pad_l
+                            y1_p = int(y1 / h * self.nn_arch['image_size'])
+                            x2_p = int(x2 / h * self.nn_arch['image_size']) + pad_l
+                            y2_p = int(y2 / h * self.nn_arch['image_size'])                   
                         
                         # Calculate a cell position.
                         xc_p = (x1_p + x2_p) // 2
@@ -304,51 +307,53 @@ class FaceDetector(object):
                                                                          
             return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})   
 
-    def __init__(self, raw_data_path, hps, model_loading):
+    def __init__(self, conf):
         """
         Parameters
         ----------
-        raw_data_path : string
-            Raw data path
-        hps : dictionary
-            Hyper-parameters
-        model_loading : boolean 
-            Face detection model loading flag
+        conf: dictionary
+            Face detector configuration dictionary.
         """
         # Initialize.
-        self.raw_data_path = raw_data_path
-        self.hps = hps
-        self.model_loading = model_loading
-        self.cell_image_size = hps['image_size'] // self.CELL_SIZE # ?
+        self.conf = conf
+        self.raw_data_path = self.conf['raw_data_path']
+        self.hps = self.conf['hps']
+        self.nn_arch = self.conf['nn_arch']
+        self.model_loading = self.conf['model_loading']
+        self.cell_image_size = self.nn_arch['image_size'] // self.CELL_SIZE
         
-        if model_loading: 
-            if MULTI_GPU:
-                self.model = load_model(self.MODEL_PATH)
-                self.parallel_model = multi_gpu_model(self.model, gpus = NUM_GPUS)
+        if self.model_loading: 
+            if self.conf['multi_gpu']:
+                self.model = load_model(self.MODEL_PATH, custom_objects={'fd_loss': fd_loss})
+                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpu'])
                 opt = optimizers.Adam(lr=self.hps['lr']
                                         , beta_1=self.hps['beta_1']
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay']) 
-                self.parallel_model.compile(optimizer=opt, loss='mse') 
+                self.parallel_model.compile(optimizer=opt, loss=fd_loss) 
             else:
-                self.model = load_model(self.MODEL_PATH)
+                self.model = load_model(self.MODEL_PATH, custom_objects={'fd_loss': fd_loss})
         else:
             # Design the face detector model.
             # Input.
-            input1 = Input(shape=(hps['image_size'], hps['image_size'], 3), name='input1')
+            input1 = Input(shape=(self.nn_arch['image_size'], self.nn_arch['image_size'], 3), name='input1')
 
             # Load yolov3 as the base model.
             base = self.YOLOV3Base 
             
             # Get 13x13x6 target features. #?
             x = base(input1) # Non-linear.
-            output = Conv2D(filters=hps['num_filters']
+            x = Conv2D(filters=self.nn_arc['bb_info_c_size']
                        , activation='linear'
                        , kernel_size=(3, 3)
                        , padding='same'
                        , name='output')(x)
+            x0_2 = Lambda(lambda x: K.sigmoid(x[..., :3]))(x)
+            x3_4 = Lambda(lambda x: K.log(x[..., 3:5] / self.nn_arch['image_size']))(x)
+            x5 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 5])))(x)
+            output = Concatenate()([x0_2, x3_4, x5])
 
-            if MULTI_GPU:
+            if self.conf['multi_gpu']:
                 self.model = Model(inputs=[input1], outputs=[output])
 
                 opt = optimizers.Adam(lr=self.hps['lr']
@@ -356,11 +361,11 @@ class FaceDetector(object):
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay'])
                 
-                self.model.compile(optimizer=opt, loss='mse')
+                self.model.compile(optimizer=opt, loss=fd_loss)
                 self.model.summary()
                 
-                self.parallel_model = multi_gpu_model(self.model, gpus = NUM_GPUS)
-                self.parallel_model.compile(optimizer=opt, loss='mse')
+                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpu'])
+                self.parallel_model.compile(optimizer=opt, loss=fd_loss)
                 self.parallel_model.summary()
                 
             else:
@@ -371,7 +376,7 @@ class FaceDetector(object):
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay'])
                 
-                self.model.compile(optimizer=opt, loss='mse')
+                self.model.compile(optimizer=opt, loss=fd_loss)
                 self.model.summary()
 
     @property
@@ -383,7 +388,7 @@ class FaceDetector(object):
         Model of Keras
             Partial yolo3 model from the input layer to the add_23 layer
         """
-        if YOLO3_BASE_MODEL_LOAD_FLAG:
+        if self.conf['yolov3_base_model_load']:
             base = load_model('yolov3_base.h5')
             base.trainable = True
             return base
@@ -395,7 +400,7 @@ class FaceDetector(object):
         weight_reader.load_weights(yolov3)
         
         # Make a base model.
-        input1 = Input(shape=(self.hps['image_size'], self.hps['image_size'], 3))
+        input1 = Input(shape=(self.nn_arch['image_size'], self.nn_arch['image_size'], 3))
         
         # 0 ~ 1.
         conv_layer = yolov3.get_layer('conv_' + str(0))
@@ -598,9 +603,9 @@ class FaceDetector(object):
         #tr_gen = self._get_training_generator()
         tr_gen = self.TrainingSequence(self.raw_data_path, self.hps, self.CELL_SIZE, self.cell_image_size)
         
-        if MULTI_GPU:
+        if self.conf['multi_gpu']:
             self.parallel_model.fit_generator(tr_gen
-                      , steps_per_epoch=self.hps['step']                  
+                      , steps_per_epoch=self.hps['step'] #?                  
                       , epochs=self.hps['epochs']
                       , verbose=1
                       , max_queue_size=100
@@ -618,23 +623,18 @@ class FaceDetector(object):
         print('Save the model.')            
         self.model.save(self.MODEL_PATH)
     
-    def evaluate(self, test_path, output_file_path):
-        """Evaluate.
+    def evaluate(self):
+        """Evaluate."""
+        test_path = self.conf['test_path']
+        output_file_path = self.conf['output_file_path']
         
-        Parameters
-        ----------
-        test_path : string
-            Testing directory.
-        output_file_path : string
-            Output file path.
-        """
-        if not os.path.isdir(os.path.join(self.raw_data_path, 'results')):
-            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+        if not os.path.isdir(os.path.join(test_path, 'results')):
+            os.mkdir(os.path.join(test_path, 'results'))
         else:
-            shutil.rmtree(os.path.join(self.raw_data_path, 'results'))
-            os.mkdir(os.path.join(self.raw_data_path, 'results'))
+            shutil.rmtree(os.path.join(test_path, 'results'))
+            os.mkdir(os.path.join(test_path, 'results'))
 
-        gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
+        gt_df = pd.read_csv(os.path.join(test_path, 'training.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
         ratios = []
@@ -658,9 +658,9 @@ class FaceDetector(object):
                 pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
                                 
                 if w >= h:
-                    w_p = self.hps['image_size']
-                    h_p = int(h / w * self.hps['image_size'])
-                    pad = self.hps['image_size'] - h_p
+                    w_p = self.nn_arch['image_size']
+                    h_p = int(h / w * self.nn_arch['image_size'])
+                    pad = self.nn_arch['image_size'] - h_p
                     
                     if pad % 2 == 0:
                         pad_t = pad // 2
@@ -672,9 +672,9 @@ class FaceDetector(object):
                     image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
                     image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
                 else:
-                    h_p = self.hps['image_size']
-                    w_p = int(w / h * self.hps['image_size'])
-                    pad = self.hps['image_size'] - w_p
+                    h_p = self.nn_arch['image_size']
+                    w_p = int(w / h * self.nn_arch['image_size'])
+                    pad = self.nn_arch['image_size'] - w_p
                     
                     if pad % 2 == 0:
                         pad_l = pad // 2
@@ -694,24 +694,26 @@ class FaceDetector(object):
                 # correct the sizes of the bounding boxes
                 for box in boxes:
                     if w >= h:
-                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
-                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
-                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
-                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.xmin = np.min([box.xmin * w / self.nn_arch['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.nn_arch['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.nn_arch['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.nn_arch['image_size'], h])
                     else:
-                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
-                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
-                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
-                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.nn_arch['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.nn_arch['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.nn_arch['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.nn_arch['image_size'], h])
 
                     # Correct image ratio.
+                    '''
                     r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
                     r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
                     
-                    if r_wh < RATIO_TH:
-                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin
-                    elif r_hw < RATIO_TH:
-                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin
+                    if r_wh < self.hps['face_region_ratio_th']:
+                        box.xmax = self.hps['face_region_ratio_th'] * (box.ymax - box.ymin) + box.xmin
+                    elif r_hw < self.hps['face_region_ratio_th']:
+                        box.ymax = self.hps['face_region_ratio_th'] * (box.xmax - box.xmin) + box.ymin
+                    '''
                     
                     # Scale ?
                     # TODO
@@ -771,16 +773,11 @@ class FaceDetector(object):
         ratios = pd.DataFrame({'ratio': ratios})
         ratios.to_csv('ratios.csv')
         
-    def test(self, test_path, output_file_path):
-        """Test.
-        
-        Parameters
-        ----------
-        test_path : string
-            Testing directory.
-        output_file_path : string
-            Output file path.
-        """
+    def test(self):
+        """Test."""
+        test_path = self.conf['test_path']
+        output_file_path = self.conf['output_file_path']
+
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
                 
         # Detect faces and save results.
@@ -800,9 +797,9 @@ class FaceDetector(object):
                 pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
                                 
                 if w >= h:
-                    w_p = self.hps['image_size']
-                    h_p = int(h / w * self.hps['image_size'])
-                    pad = self.hps['image_size'] - h_p
+                    w_p = self.nn_arch['image_size']
+                    h_p = int(h / w * self.nn_arch['image_size'])
+                    pad = self.nn_arch['image_size'] - h_p
                     
                     if pad % 2 == 0:
                         pad_t = pad // 2
@@ -814,9 +811,9 @@ class FaceDetector(object):
                     image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
                     image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
                 else:
-                    h_p = self.hps['image_size']
-                    w_p = int(w / h * self.hps['image_size'])
-                    pad = self.hps['image_size'] - w_p
+                    h_p = self.nn_arch['image_size']
+                    w_p = int(w / h * self.nn_arch['image_size'])
+                    pad = self.nn_arch['image_size'] - w_p
                     
                     if pad % 2 == 0:
                         pad_l = pad // 2
@@ -836,25 +833,27 @@ class FaceDetector(object):
                 # Correct the sizes of the bounding boxes
                 for box in boxes:
                     if w >= h:
-                        box.xmin = np.min([box.xmin * w / self.hps['image_size'], w])
-                        box.xmax = np.min([box.xmax * w / self.hps['image_size'], w])
-                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.hps['image_size'], h])
-                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.hps['image_size'], h])
+                        box.xmin = np.min([box.xmin * w / self.nn_arch['image_size'], w])
+                        box.xmax = np.min([box.xmax * w / self.nn_arch['image_size'], w])
+                        box.ymin = np.min([np.max([box.ymin - pad_t, 0]) * w / self.nn_arch['image_size'], h])
+                        box.ymax = np.min([np.max([box.ymax - pad_t, 0]) * w / self.nn_arch['image_size'], h])
                     else:
-                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.hps['image_size'], w])
-                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.hps['image_size'], w])
-                        box.ymin = np.min([box.ymin * h / self.hps['image_size'], h])
-                        box.ymax = np.min([box.ymax * h / self.hps['image_size'], h])
+                        box.xmin = np.min([np.max([box.xmin - pad_l, 0]) * h / self.nn_arch['image_size'], w])
+                        box.xmax = np.min([np.max([box.xmax - pad_l, 0]) * h / self.nn_arch['image_size'], w])
+                        box.ymin = np.min([box.ymin * h / self.nn_arch['image_size'], h])
+                        box.ymax = np.min([box.ymax * h / self.nn_arch['image_size'], h])
                     
-                    # Correct image ratio.
+                    # Correct image ratio. ?
+                    '''
                     r_wh = (box.xmax - box.xmin) / (box.ymax - box.ymin)
                     r_hw = (box.ymax - box.ymin) / (box.xmax - box.xmin)
                     
-                    if r_wh < RATIO_TH:
-                        box.xmax = RATIO_TH * (box.ymax - box.ymin) + box.xmin #?
-                    elif r_hw < RATIO_TH:
-                        box.ymax = RATIO_TH * (box.xmax - box.xmin) + box.ymin #?
-                    
+                    if r_wh < self.hps['face_region_ratio_th']:
+                        box.xmax = self.hps['face_region_ratio_th'] * (box.ymax - box.ymin) + box.xmin #?
+                    elif r_hw < self.hps['face_region_ratio_th']:
+                        box.ymax = self.hps['face_region_ratio_th'] * (box.xmax - box.xmin) + box.ymin #?
+                    '''
+                        
                     # Scale ?
                     # TODO
                     
@@ -875,16 +874,6 @@ class FaceDetector(object):
                 # Check exception.
                 if len(boxes) == 0:
                     continue
-
-                # Write the image with bounding boxes to file.
-                '''
-                if platform.system() == 'Windows':
-                    file_new_name = file_name.split('\\')[-1]
-                    file_new_name = file_name[:-4] + '_detected' + file_name[-4:]
-                
-                print(file_new_name)
-                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
-                '''
                                                                     
     def detect(self, image):
         """Detect faces.
@@ -905,7 +894,8 @@ class FaceDetector(object):
         
         # Eliminate candidates less than the face confidence threshold.
         face_cand_bboxes = []
-        face_cands[...,-1] = face_cands[...,0] * face_cands[...,-1] #?
+        face_cands[..., 3:5] = np.exp(face_cands[..., 3:5]) 
+        face_cands[...,-1] = face_cands[...,0] * face_cands[...,-1]
 
         for i in range(face_cands.shape[0]):
             for j in range(face_cands.shape[1]):
@@ -921,14 +911,14 @@ class FaceDetector(object):
                     # Convert a raw ratio bound box into a bound box for practical image size scale.  
                     px = np.min([int(bx * self.cell_image_size), self.cell_image_size - 1]) + self.cell_image_size * j
                     py = np.min([int(by * self.cell_image_size), self.cell_image_size - 1]) + self.cell_image_size * i
-                    pw = np.min([bw * self.hps['image_size'], self.hps['image_size']]) 
-                    ph = np.min([bh * self.hps['image_size'], self.hps['image_size']])
+                    pw = np.min([bw * self.nn_arch['image_size'], self.nn_arch['image_size']]) 
+                    ph = np.min([bh * self.nn_arch['image_size'], self.nn_arch['image_size']])
                     
                     # Calculate xmin, ymin, xmax, ymax positions for the original image size.
                     xmin = np.max([px - int(pw / 2), 0])
                     ymin = np.max([py - int(ph / 2), 0])
-                    xmax = np.min([px + int(pw / 2), self.hps['image_size'] - 1])
-                    ymax = np.min([py + int(ph / 2), self.hps['image_size'] - 1])
+                    xmax = np.min([px + int(pw / 2), self.nn_arch['image_size'] - 1])
+                    ymax = np.min([py + int(ph / 2), self.nn_arch['image_size'] - 1])
                     
                     # Get a bound box.
                     face_cand_bbox = BoundBox(xmin, ymin, xmax, ymax, objness = objectness, classes = [score])
@@ -951,121 +941,37 @@ class FaceDetector(object):
         
         return face_cand_bboxes
                  
-def main(args):
-    """Main.
+def main():
+    """Main."""
     
-    Parameters
-    ----------
-    args : argument type 
-        Arguments
-    """
-    hps = {}
-    hps['step'] = 1
-            
-    if args.mode == 'train':
-        # Get arguments.
-        raw_data_path = args.raw_data_path
-      
-        # hps.
-        hps['image_size'] = int(args.image_size)    
-        hps['num_filters'] = int(args.num_filters)
-        hps['lr'] = float(args.lr)
-        hps['beta_1'] = float(args.beta_1)
-        hps['beta_2'] = float(args.beta_2)
-        hps['decay'] = float(args.decay)
-        hps['batch_size'] = int(args.batch_size)
-        hps['epochs'] = int(args.epochs) 
-        hps['face_conf_th'] = float(args.face_conf_th)
-        hps['nms_iou_th'] = float(args.nms_iou_th)
-        hps['num_cands'] = int(args.num_cands)
-        
-        model_loading = False if int(args.model_loading) == 0 else True        
-        
-        # Train.
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+    # Load configuration.
+    with open("face_vijnana_yolov3.json", 'r') as f:
+        conf = json.load(f)['fd_conf']    
+                
+    if conf['mode'] == 'train':        
+        fd = FaceDetector(conf)
         
         ts = time.time()
         fd.train()
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
-    elif args.mode == 'evaluate':
-        # Get arguments.
-        raw_data_path = args.raw_data_path
-        output_file_path = args.output_file_path
-      
-        # hps.
-        hps['image_size'] = int(args.image_size) 
-        hps['num_filters'] = int(args.num_filters)
-        hps['lr'] = float(args.lr)
-        hps['beta_1'] = float(args.beta_1)
-        hps['beta_2'] = float(args.beta_2)
-        hps['decay'] = float(args.decay)
-        hps['batch_size'] = int(args.batch_size)
-        hps['epochs'] = int(args.epochs) 
-        hps['face_conf_th'] = float(args.face_conf_th)
-        hps['nms_iou_th'] = float(args.nms_iou_th)
-        hps['num_cands'] = int(args.num_cands)
-        
-        model_loading = False if int(args.model_loading) == 0 else True        
-        
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+    elif conf['mode'] == 'evaluate':
+        fd = FaceDetector(conf)
         
         ts = time.time()
-        fd.evaluate(raw_data_path, output_file_path)
+        fd.evaluate()
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
-    elif args.mode == 'test':
-        # Get arguments.
-        raw_data_path = args.raw_data_path
-        output_file_path = args.output_file_path
-      
-        # hps.
-        hps['image_size'] = int(args.image_size) 
-        hps['num_filters'] = int(args.num_filters)
-        hps['lr'] = float(args.lr)
-        hps['beta_1'] = float(args.beta_1)
-        hps['beta_2'] = float(args.beta_2)
-        hps['decay'] = float(args.decay)
-        hps['batch_size'] = int(args.batch_size)
-        hps['epochs'] = int(args.epochs) 
-        hps['face_conf_th'] = float(args.face_conf_th)
-        hps['nms_iou_th'] = float(args.nms_iou_th)
-        hps['num_cands'] = int(args.num_cands)
-        
-        model_loading = False if int(args.model_loading) == 0 else True        
-        
-        # Test.
-        fd = FaceDetector(raw_data_path, hps, model_loading)
+    elif conf['mode'] == 'test':
+        fd = FaceDetector(conf)
         
         ts = time.time()
-        fd.test(raw_data_path, output_file_path)
+        fd.test()
         te = time.time()
         
         print('Elasped time: {0:f}s'.format(te-ts))
         
-if __name__ == '__main__':
-    
-    # Parse arguments.
-    parser = argparse.ArgumentParser()
-    
-    parser.add_argument('--mode')
-    parser.add_argument('--raw_data_path')
-    parser.add_argument('--output_file_path')
-    parser.add_argument('--image_size')
-    parser.add_argument('--num_filters')
-    parser.add_argument('--lr')
-    parser.add_argument('--beta_1')
-    parser.add_argument('--beta_2')
-    parser.add_argument('--decay')
-    parser.add_argument('--batch_size')
-    parser.add_argument('--epochs')
-    parser.add_argument('--face_conf_th')
-    parser.add_argument('--nms_iou_th')
-    parser.add_argument('--num_cands')
-    parser.add_argument('--model_loading')
-    args = parser.parse_args()
-    
-    main(args)
-    pass
+if __name__ == '__main__':    
+    main()
