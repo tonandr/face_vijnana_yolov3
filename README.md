@@ -111,7 +111,7 @@ The dataset can be obtained from [UCCS](https://vast.uccs.edu/Opensetface/).
 }
 ```
 
-### First, train the face detection model. It is assumed that 4 Tesla K80 GPUs are provided. You should set mode to "train". For accelerating computing, you can set multi_gpu to True and the number of gpus.
+### First, train the face detection model. It is assumed that 4 Tesla K80 GPUs are provided. You should set mode to "train". For accelerating computing, you can set multi_gpu to true and the number of gpus.
 
 ```python face_detection.py```
 
