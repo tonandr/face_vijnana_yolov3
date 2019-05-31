@@ -51,15 +51,16 @@ from keras import backend as K
 from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
 
 #os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
-#os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+#os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
 # Constants.
 DEBUG = True
 
 def fd_loss(y_true, y_pred):
-    l2_loss = K.mean(K.sqrt((K.pow(y_true[..., :5] - y_pred[..., :5], 2.0))))
-    ce_loss = K.binary_crossentropy(y_true[..., 5], y_pred[..., 5])
-    loss = l2_loss + ce_loss # Weight?
+    o_loss = K.binary_crossentropy(y_true[..., 0], y_pred[..., 0])
+    l2_loss = K.mean(K.sqrt(K.square(y_true[..., 1:5] - y_pred[..., 1:5])), axis=-1)
+    c_loss = K.binary_crossentropy(y_true[..., 5], y_pred[..., 5])
+    loss = (o_loss + l2_loss + c_loss)/3. # Weight?
     return loss 
 
 class FaceDetector(object):
@@ -74,10 +75,11 @@ class FaceDetector(object):
     class TrainingSequence(Sequence):
         """Training data set sequence."""
         
-        def __init__(self, raw_data_path, hps, CELL_SIZE, cell_image_size):
+        def __init__(self, raw_data_path, hps, nn_arch, CELL_SIZE, cell_image_size):
             # Get ground truth.
             self.raw_data_path = raw_data_path
             self.hps = hps
+            self.nn_arch = nn_arch
             self.gt_df = pd.read_csv(os.path.join(self.raw_data_path, 'training.csv'))
             self.gt_df_g = self.gt_df.groupby('FILE')
             self.file_names = list(self.gt_df_g.groups.keys())
@@ -145,7 +147,7 @@ class FaceDetector(object):
                         image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
                         
                     # Create a ground truth bound box tensor (13x13x6).
-                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
+                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.nn_arch['bb_info_c_size']))
                     
                     for i in range(df.shape[0]):
                         # Check exception.
@@ -248,7 +250,7 @@ class FaceDetector(object):
                         image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?   
                         
                     # Create a ground truth bound box tensor (13x13x6).
-                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.hps['num_filters']))
+                    gt_tensor = np.zeros(shape=(self.CELL_SIZE, self.CELL_SIZE, self.nn_arch['bb_info_c_size']))
                     
                     for i in range(df.shape[0]):
                         # Check exception.
@@ -305,7 +307,7 @@ class FaceDetector(object):
                     images.append(image)
                     gt_tensors.append(gt_tensor)
                                                                          
-            return ({'input': np.asarray(images)}, {'output': np.asarray(gt_tensors)})   
+            return ({'input1': np.asarray(images)}, {'output': np.asarray(gt_tensors)})   
 
     def __init__(self, conf):
         """
@@ -325,7 +327,7 @@ class FaceDetector(object):
         if self.model_loading: 
             if self.conf['multi_gpu']:
                 self.model = load_model(self.MODEL_PATH, custom_objects={'fd_loss': fd_loss})
-                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpu'])
+                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpus'])
                 opt = optimizers.Adam(lr=self.hps['lr']
                                         , beta_1=self.hps['beta_1']
                                         , beta_2=self.hps['beta_2']
@@ -343,15 +345,14 @@ class FaceDetector(object):
             
             # Get 13x13x6 target features. #?
             x = base(input1) # Non-linear.
-            x = Conv2D(filters=self.nn_arc['bb_info_c_size']
+            x = Conv2D(filters=self.nn_arch['bb_info_c_size']
                        , activation='linear'
                        , kernel_size=(3, 3)
-                       , padding='same'
-                       , name='output')(x)
-            x0_2 = Lambda(lambda x: K.sigmoid(x[..., :3]))(x)
-            x3_4 = Lambda(lambda x: K.log(x[..., 3:5] / self.nn_arch['image_size']))(x)
+                       , padding='same')(x)
+            x0 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 0])))(x)
+            x1_4 = Lambda(lambda x: x[..., 1:5])(x)
             x5 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 5])))(x)
-            output = Concatenate()([x0_2, x3_4, x5])
+            output = Concatenate(name='output')([x0, x1_4, x5])
 
             if self.conf['multi_gpu']:
                 self.model = Model(inputs=[input1], outputs=[output])
@@ -364,7 +365,7 @@ class FaceDetector(object):
                 self.model.compile(optimizer=opt, loss=fd_loss)
                 self.model.summary()
                 
-                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpu'])
+                self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpus'])
                 self.parallel_model.compile(optimizer=opt, loss=fd_loss)
                 self.parallel_model.summary()
                 
@@ -601,15 +602,19 @@ class FaceDetector(object):
         """Train face detector."""
         # Get the generator of training data.
         #tr_gen = self._get_training_generator()
-        tr_gen = self.TrainingSequence(self.raw_data_path, self.hps, self.CELL_SIZE, self.cell_image_size)
+        tr_gen = self.TrainingSequence(self.raw_data_path
+                                       , self.hps
+                                       , self.nn_arch
+                                       , self.CELL_SIZE
+                                       , self.cell_image_size)
         
         if self.conf['multi_gpu']:
             self.parallel_model.fit_generator(tr_gen
                       , steps_per_epoch=self.hps['step'] #?                  
                       , epochs=self.hps['epochs']
                       , verbose=1
-                      , max_queue_size=100
-                      , workers=4
+                      , max_queue_size=400
+                      , workers=8
                       , use_multiprocessing=True)
         else:
             self.model.fit_generator(tr_gen
@@ -894,7 +899,6 @@ class FaceDetector(object):
         
         # Eliminate candidates less than the face confidence threshold.
         face_cand_bboxes = []
-        face_cands[..., 3:5] = np.exp(face_cands[..., 3:5]) 
         face_cands[...,-1] = face_cands[...,0] * face_cands[...,-1]
 
         for i in range(face_cands.shape[0]):

@@ -138,7 +138,10 @@ def cal_face_pairs_dists():
         subject_ids = list(db_g.groups.keys())
         
         # Same face identity pairs.
-        for subject_id in subject_ids:
+        print('Same face identity pairs.')
+        for c, subject_id in enumerate(subject_ids):
+            if DEBUG: print(c + 1, '/', len(subject_ids), end='\r')
+            
             if subject_id == -1:
                 continue
             
@@ -152,35 +155,40 @@ def cal_face_pairs_dists():
             for i in range(len(file_names) - 1): 
                 for j in range(i + 1, len(file_names)): 
                     same_dists.append(norm(f[file_names[i]].value - f[file_names[j]].value)) 
+
+        if DEBUG: print()
+
+        # Determine pairs of different face identity randomly.
+        idxes = range(len(subject_ids))
+        num_pairs = len(subject_ids) // 2
+        pairs = np.random.choice(idxes, size=(num_pairs, 2), replace=False)
             
         # Different face identity pairs.
-        for k in range(len(subject_ids) - 1):
-            if DEBUG: print(k, '/', len(subject_ids) - 1)
+        print('Different face identity pairs.')
+        for i in range(pairs.shape[0]):
+            if DEBUG: print(i + 1, '/', pairs.shape[0], end='\r')
             
-            if subject_ids[k] == -1:
-                continue
-            
+            k = pairs[i, 0]
+            l = pairs[i, 1]
+
+            if subject_ids[k] == -1 or subject_ids[l] == -1:
+                continue            
+ 
             ref_df = db_g.get_group(subject_ids[k])
             ref_file_names = list(ref_df.iloc[:, 1])
+
+            comp_df = db_g.get_group(subject_ids[l])
+            comp_file_names = list(comp_df.iloc[:, 1])
+                            
+            for ref_fn in ref_file_names: 
+                for comp_fn in comp_file_names: 
+                    diff_dists.append(norm(f[ref_fn].value - f[comp_fn].value))            
             
-            for l in range(k + 1, len(subject_ids)):
-                if DEBUG: print(l, '/', len(subject_ids) -k - 1, end='\r')
-                
-                if subject_ids[l] == -1:
-                    continue            
-            
-                comp_df = db_g.get_group(subject_ids[k])
-                comp_file_names = list(comp_df.iloc[:, 1])
-                                
-                for ref_fn in ref_file_names: 
-                    for comp_fn in comp_file_names: 
-                        diff_dists.append(norm(f[ref_fn].value - f[comp_fn].value))         
-    
     same_dists = np.asarray(same_dists)
     diff_dists = np.asarray(diff_dists)
     
     with h5py.File('face_pairs_dists.h5', 'w') as f:
-        f['sample_dists'] = same_dists
+        f['same_dists'] = same_dists
         f['diff_dists'] = diff_dists
 
     return same_dists, diff_dists
@@ -203,10 +211,14 @@ def cal_VAR_FAR(sim_th_range):
         d_r = d_r.astype(np.int64)
         fars.append(d_r.sum() / diff_dists.shape[0])    
 
-    res = pd.DataFrame({'sim_ths': sim_ths
-                        , 'vars': vars
-                        , 'fars': fars})
-    res.to_csv('var_far.csv')
+    sim_ths = np.asarray(sim_ths)
+    vars = np.asarray(vars)
+    fars = np.asarray(fars)
+
+    with h5py.File('var_far.h5', 'w') as f:
+        f['sim_ths'] = same_dists
+        f['vars'] = vars
+        f['fars'] = fars
     
     return sim_ths, vars, fars
 
@@ -340,7 +352,7 @@ def main(args):
     elif mode == MODE_CAL_FACE_PAIRS_DISTS:
         cal_face_pairs_dists()
     elif mode == MODE_CAL_VAR_FAR:
-        sim_th_range = range(0.1, 1.1, 0.1)
+        sim_th_range = np.arange(0.1, 1.1, 0.1)
         cal_VAR_FAR(sim_th_range)
     elif mode == MODE_CAL_ACC_FI:
         tp_ls = []
@@ -349,13 +361,14 @@ def main(args):
         fn_ls = []
         acc_ls = []
         
-        for iou_th in range(0.5, 1.0, 0.05):
+        for iou_th in np.arange(0.5, 1.0, 0.05):
+            if DEBUG: print(iou_th)
             tp, fp, tn, fn, acc = cal_acc_fi(gt_path, sol_path, iou_th)
             tp_ls.append(tp)
             fp_ls.append(fp)
             tn_ls.append(tn)
             fn_ls.append(fn)            
-            mAP_ls.append(mAP)
+            acc_ls.append(acc)
         
         tp_ls = np.asarray(tp_ls)
         fp_ls = np.asarray(fp_ls)

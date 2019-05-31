@@ -175,7 +175,7 @@ class FaceIdentifier(object):
     class TrainingSequence(Sequence):
         """Training data set sequence."""
         
-        def __init__(self, raw_data_path, hps, load_flag=True):
+        def __init__(self, raw_data_path, hps, nn_arch, load_flag=True):
             if load_flag:
                 with open('img_triplet_pairs.pickle', 'rb') as f:
                     self.img_triplet_pairs = pickle.load(f)
@@ -184,6 +184,7 @@ class FaceIdentifier(object):
                 # Create indexing data of positive and negative cases.
                 self.raw_data_path = raw_data_path
                 self.hps = hps
+                self.nn_arch = nn_arch
                 self.db = pd.read_csv('db.csv')
                 self.db = self.db.iloc[:, 1:]
 
@@ -614,14 +615,14 @@ class FaceIdentifier(object):
         
     def train(self):
         """Train face detector."""
-        trGen = self.TrainingSequence(self.raw_data_path, self.hps, load_flag=False)
+        trGen = self.TrainingSequence(self.raw_data_path, self.hps, self.nn_arch, load_flag=False)
         
         if self.conf['multi_gpu']:
             self.parallel_model.fit_generator(trGen
                           , steps_per_epoch=self.hps['step'] #?                   
                           , epochs=self.hps['epochs']
                           , verbose=1
-                          , max_queue_size=100
+                          , max_queue_size=400
                           , workers=8
                           , use_multiprocessing=True)
         else:     
@@ -629,7 +630,7 @@ class FaceIdentifier(object):
                           , steps_per_epoch=self.hps['step']                  
                           , epochs=self.hps['epochs']
                           , verbose=1
-                          , max_queue_size=10
+                          , max_queue_size=100
                           , workers=4
                           , use_multiprocessing=True)
 
