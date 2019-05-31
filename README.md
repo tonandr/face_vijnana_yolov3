@@ -125,7 +125,7 @@ The dataset can be obtained from [UCCS](https://vast.uccs.edu/Opensetface/).
 
 ### Train the face identification model via setting mode to "train". To train the model with previous weights, you should set model_loading to 1.
 
-```python face_dentification.py```
+```python face_identification.py```
 
 ### Evaluate the model via generating detection result images, or test the model. Here, you should set model_loading to true.
 
