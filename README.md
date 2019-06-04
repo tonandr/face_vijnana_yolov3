@@ -24,6 +24,10 @@ Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 
 
 ```conda activate tf36```
 
+### Install [CUDA Toolkit 10.1](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&target_distro=Ubuntu&target_version=1604&target_type=debnetwork)
+
+### Install [cuDNN v7.6.0 for CUDA 10.1](https://developer.nvidia.com/rdp/cudnn-download) 
+
 ### Install necessary python packages.
 
 ```pip install tensorflow-gpu keras scikit-image scikit-learn pandas Pillow```
@@ -40,34 +44,92 @@ Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 
 
 ```wget https://pjreddie.com/media/files/yolov3.weights```
 
-### Make the resource directory and in the resource directory, make the training folder, and copy training images 
-obtained by [UCCS](https://vast.uccs.edu/Opensetface/) and training.csv into the training folder.
+### Make the resource directory and in the resource directory, make the training and validation folders, and copy training images & training.csv into the training folder and validation images & validation.csv into the validation folder.
 
-### First, train the face detection model. It is assumed that 4 Tesla K80 GPUs are provided. To use GPUs, in the source code, set MULTI_GPU = True.
+The dataset can be obtained from [UCCS](https://vast.uccs.edu/Opensetface/).
 
-```python face_detection.py --mode train --raw_data_path /home/ubuntu/face_recog_yolov3/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 160 --epochs 12 --model_loading 0```
+### Configuration json format file (face_vijnana_yolov3.json).
 
-### Evaluate the model via generating detection result images, or test the model.
+```
+{
+	"fd_conf": {
+		"mode": "train",
+		"raw_data_path": "/home/ubuntu/face_recog/resource/training",
+		"test_path": "/home/ubuntu/face_recog/resource/validation",
+		"output_file_path": "solution_fd.csv",
+		"multi_gpu": true,
+		"num_gpus": 4,
+		"yolov3_base_model_load": true,
+		"hps": {
+			"lr": 0.0001,
+			"beta_1": 0.99,
+			"beta_2": 0.99,
+			"decay": 0.0,
+			"epochs": 6,
+			"step": 1,
+			"batch_size": 40,
+			"face_conf_th": 0.5,
+			"nms_iou_th": 0.5,
+			"num_cands": 60,
+			"face_region_ratio_th": 0.8
+		},
+			
+		"nn_arch": {
+			"image_size": 416,
+			"bb_info_c_size": 6
+		},
+			
+		"model_loading": false
+	},
+	
+	"fi_conf": {
+		"mode": "fid_db",
+		"raw_data_path": "/home/ubuntu/face_recog/resource/training",
+		"test_path": "/home/ubuntu/face_recog/resource/validation",
+		"output_file_path": "solution_fi.csv",
+		"multi_gpu": true,
+		"num_gpus": 4,
+		"yolov3_base_model_load": false,
+		"hps": {
+			"lr": 0.001,
+			"beta_1": 0.99,
+			"beta_2": 0.99,
+			"decay": 0.0,
+			"epochs": 1,
+			"step": 1,
+			"batch_size": 1,
+			"sim_th": 0.7
+		},
+			
+		"nn_arch": {
+			"image_size": 416,
+			"dense1_dim": 64
+		},
+			
+		"model_loading": true
+	}
+}
+```
 
-```python face_detection.py --mode evaluate --raw_data_path /home/ubuntu/face_recog_yolov3/resource/training --output_file_path /home/ubuntu/face_recog_yolov3/resource/soluton_fd.csv --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 160 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1```
+### First, train the face detection model. It is assumed that 4 Tesla K80 GPUs are provided. You should set mode to "train". For accelerating computing, you can set multi_gpu to true and the number of gpus.
 
+```python face_detection.py```
 
-```python face_detection.py --mode test --raw_data_path /home/ubuntu/face_recog_yolov3/resource/training --output_file_path /home/ubuntu/face_recog_yolov3/resource/soluton_fd.csv --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 160 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1```
+### Evaluate the model via generating detection result images, or test the model, via setting mode to 'evaluate' or 'test'. Here, you should set model_loading to true.
 
-### Create subject faces and database.
+```python face_detection.py```
 
-```python face_reidentification.py --mode data --raw_data_path /home/ubuntu/face_recog_yolov3/resource --image_size 416 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60```
+### Create subject faces and database. Mode should be set to "data" in fi_conf.
 
-### Train the face identification model.
+```python face_identification.py```
 
-```python face_reidentification.py --mode train --raw_data_path /home/ubuntu/face_recog_yolov3/resource --image_size 416 --num_dense1_layers 0 --dense1 64 --num_dense2_layers 0 --dense2 0 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 16 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 0```
+### Train the face identification model via setting mode to "train". To train the model with previous weights, you should set model_loading to 1.
 
-### Evaluate the model via generating detection result images, or test the model.
+```python face_identification.py```
 
-```python face_reidentification.py --mode evaluate --raw_data_path /home/ubuntu/face_recog_yolov3/resource --output_file_path /home/ubuntu/face_recog_yolov3/resource/solution_fi.csv --image_size 416 --num_dense1_layers 0 --dense1 64 --num_dense2_layers 0 --dense2 0 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 16 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --sim_th 0.1 --model_loading 1```
+### Evaluate the model via generating detection result images, or test the model. Here, you should set model_loading to true.
 
-```python face_reidentification.py --mode test --raw_data_path /home/ubuntu/face_recog_yolov3/resource --output_file_path /home/ubuntu/face_recog_yolov3/resource/solution_fi.csv --image_size 416 --num_dense1_layers 0 --dense1 64 --num_dense2_layers 0 --dense2 0 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 16 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --sim_th 0.1 --model_loading 1```
+```python face_identification.py```
 
 # Performance
 TODO
-
