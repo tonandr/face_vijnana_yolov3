@@ -643,7 +643,7 @@ class FaceIdentifier(object):
         db = db.iloc[:, 1:]
         db_g = db.groupby('subject_id')
 
-        with h5py.File('subject_facial_ids.h5') as f:
+        with h5py.File('subject_facial_ids.h5', 'w') as f:
             for subject_id in db_g.groups.keys():
                 if subject_id == -1:
                     continue
@@ -705,13 +705,13 @@ class FaceIdentifier(object):
         test_path = self.conf['test_path']
         output_file_path = self.conf['output_file_path']
         
-        if not os.path.isdir(os.path.join(test_path, 'results')):
-            os.mkdir(os.path.join(test_path, 'results'))
+        if not os.path.isdir(os.path.join(test_path, 'results_fi')):
+            os.mkdir(os.path.join(test_path, 'results_fi'))
         else:
-            shutil.rmtree(os.path.join(test_path, 'results'))
-            os.mkdir(os.path.join(test_path, 'results'))
+            shutil.rmtree(os.path.join(test_path, 'results_fi'))
+            os.mkdir(os.path.join(test_path, 'results_fi'))
         
-        gt_df = pd.read_csv(os.path.join(test_path, 'training.csv'))
+        gt_df = pd.read_csv(os.path.join(test_path, 'validation.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
         
@@ -861,10 +861,14 @@ class FaceIdentifier(object):
                     
                     if platform.system() == 'Windows':
                         f.write(file_name.split('\\')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                        print(file_name.split('\\')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',', end=' ')
                     else:
                         f.write(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',')
+                        print(file_name.split('/')[-1] + ',' + str(subject_id) + ',' + str(box.xmin) + ',' + str(box.ymin) + ',', end=' ')
                         
                     f.write(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()) + '\n')
+                    print(str(box.xmax - box.xmin) + ',' + str(box.ymax - box.ymin) + ',' + str(box.get_score()))
+                    
                     count +=1
 
                 #boxes = [box for box in boxes if box.subject_id != -1]
@@ -885,7 +889,7 @@ class FaceIdentifier(object):
                 for i in range(df.shape[0]):
                     # Check exception.
                     res = df.iloc[i, 3:] > 0 #?
-                    if res.all() == False or df.iloc[i, 2] == -1:
+                    if res.all() == False: #or df.iloc[i, 2] == -1:
                         continue
                     
                     xmin = int(df.iloc[i, 3])
@@ -916,7 +920,7 @@ class FaceIdentifier(object):
                 file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
                 
                 print(file_new_name)
-                imsave(os.path.join(test_path, 'results', file_new_name), (image).astype('uint8'))
+                imsave(os.path.join(test_path, 'results_fi', file_new_name), (image).astype('uint8'))
         
     def test(self):
         """Test."""
@@ -1083,8 +1087,12 @@ def main():
     """Main."""
     
     # Load configuration.
-    with open("face_vijnana_yolov3.json", 'r') as f:
-        conf = json.load(f)   
+    if platform.system() == 'Windows':
+        with open("face_vijnana_yolov3_win.json", 'r') as f:
+            conf = json.load(f)   
+    else:
+        with open("face_vijnana_yolov3.json", 'r') as f:
+            conf = json.load(f)   
                 
     if conf['fi_conf']['mode'] == 'data':               
         # Create db.

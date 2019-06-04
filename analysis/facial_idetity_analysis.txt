@@ -87,3 +87,6 @@ Epoch 12/12
 273/273 [==============================] - 3585s 13s/step - loss: 7.4506e-05
 Save the model.
 Elasped time: 43411.951019s
+
+sim_dists[cand]; sim_dists[subject_ids.index(998)]
+pyplot.cla(); pyplot.plot(sim_dists); pyplot.grid()

@@ -48,7 +48,7 @@ from keras import optimizers
 from keras.utils.data_utils import Sequence
 from keras import backend as K
 
-from yolov3_detect import make_yolov3_model, BoundBox, do_nms_v2, WeightReader, draw_boxes_v2, draw_boxes_v3
+from yolov3_detect import make_yolov3_model, BoundBox, WeightReader, do_nms_v2, draw_boxes_v3, _sigmoid
 
 #os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
 #os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
@@ -326,15 +326,15 @@ class FaceDetector(object):
         
         if self.model_loading: 
             if self.conf['multi_gpu']:
-                self.model = load_model(self.MODEL_PATH, custom_objects={'fd_loss': fd_loss})
+                self.model = load_model(self.MODEL_PATH) #, custom_objects={'fd_loss': fd_loss})
                 self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpus'])
                 opt = optimizers.Adam(lr=self.hps['lr']
                                         , beta_1=self.hps['beta_1']
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay']) 
-                self.parallel_model.compile(optimizer=opt, loss=fd_loss) 
+                self.parallel_model.compile(optimizer=opt, loss='mse') #fd_loss)
             else:
-                self.model = load_model(self.MODEL_PATH, custom_objects={'fd_loss': fd_loss})
+                self.model = load_model(self.MODEL_PATH) #, custom_objects={'fd_loss': fd_loss})
         else:
             # Design the face detector model.
             # Input.
@@ -345,14 +345,15 @@ class FaceDetector(object):
             
             # Get 13x13x6 target features. #?
             x = base(input1) # Non-linear.
-            x = Conv2D(filters=self.nn_arch['bb_info_c_size']
+            output = Conv2D(filters=self.nn_arch['bb_info_c_size']
                        , activation='linear'
                        , kernel_size=(3, 3)
-                       , padding='same')(x)
-            x0 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 0])))(x)
-            x1_4 = Lambda(lambda x: x[..., 1:5])(x)
-            x5 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 5])))(x)
-            output = Concatenate(name='output')([x0, x1_4, x5])
+                       , padding='same'
+                       , name='output')(x)
+            #x0 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 0])))(x)
+            #x1_4 = Lambda(lambda x: x[..., 1:5])(x)
+            #x5 = Lambda(lambda x: K.expand_dims(K.sigmoid(x[..., 5])))(x)
+            #output = Concatenate(name='output')([x0, x1_4, x5])
 
             if self.conf['multi_gpu']:
                 self.model = Model(inputs=[input1], outputs=[output])
@@ -362,11 +363,11 @@ class FaceDetector(object):
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay'])
                 
-                self.model.compile(optimizer=opt, loss=fd_loss)
+                self.model.compile(optimizer=opt, loss='mse') #fd_loss)
                 self.model.summary()
                 
                 self.parallel_model = multi_gpu_model(self.model, gpus=self.conf['num_gpus'])
-                self.parallel_model.compile(optimizer=opt, loss=fd_loss)
+                self.parallel_model.compile(optimizer=opt, loss='mse') #fd_loss)
                 self.parallel_model.summary()
                 
             else:
@@ -377,7 +378,7 @@ class FaceDetector(object):
                                         , beta_2=self.hps['beta_2']
                                         , decay=self.hps['decay'])
                 
-                self.model.compile(optimizer=opt, loss=fd_loss)
+                self.model.compile(optimizer=opt, loss='mse') #fd_loss)
                 self.model.summary()
 
     @property
@@ -639,7 +640,7 @@ class FaceDetector(object):
             shutil.rmtree(os.path.join(test_path, 'results'))
             os.mkdir(os.path.join(test_path, 'results'))
 
-        gt_df = pd.read_csv(os.path.join(test_path, 'training.csv'))
+        gt_df = pd.read_csv(os.path.join(test_path, 'validation.csv'))
         gt_df_g = gt_df.groupby('FILE')        
         file_names = glob.glob(os.path.join(test_path, '*.jpg'))
         ratios = []
@@ -653,7 +654,6 @@ class FaceDetector(object):
                 
                 # Load an image.
                 image = imread(os.path.join(test_path, file_name))
-                image_o_size = (image.shape[0], image.shape[1])
                 image_o = image.copy() 
                 image = image/255
              
@@ -694,7 +694,7 @@ class FaceDetector(object):
                 image = image[np.newaxis, :]
                        
                 # Detect faces.
-                boxes = self.detect(image, image_o_size)
+                boxes = self.detect(image)
                 
                 # correct the sizes of the bounding boxes
                 for box in boxes:
@@ -764,10 +764,12 @@ class FaceDetector(object):
                     gt_boxes.append(gt_box)
                     ratios.append((xmax - xmin) / (ymax - ymin))
                     
-                image = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th']) 
+                image1 = draw_boxes_v3(image_o, gt_boxes, self.hps['face_conf_th'], color=(255, 0, 0)) 
+                del image_o
                 
                 # Draw bounding boxes on the image using labels.
-                image = draw_boxes_v2(image, boxes, self.hps['face_conf_th']) 
+                image = draw_boxes_v3(image1, boxes, self.hps['face_conf_th'], color=(0, 255, 0))  
+                del image1
          
                 # Write the image with bounding boxes to file.
                 file_new_name = file_new_name[:-4] + '_detected' + file_new_name[-4:]
@@ -899,7 +901,8 @@ class FaceDetector(object):
         
         # Eliminate candidates less than the face confidence threshold.
         face_cand_bboxes = []
-        face_cands[...,-1] = face_cands[...,0] * face_cands[...,-1]
+        face_cands[..., 0] = _sigmoid(face_cands[..., 0])
+        face_cands[...,-1] = face_cands[...,0] * _sigmoid(face_cands[...,-1])
 
         for i in range(face_cands.shape[0]):
             for j in range(face_cands.shape[1]):
@@ -949,8 +952,12 @@ def main():
     """Main."""
     
     # Load configuration.
-    with open("face_vijnana_yolov3.json", 'r') as f:
-        conf = json.load(f)['fd_conf']    
+    if platform.system() == 'Windows':
+        with open("face_vijnana_yolov3_win.json", 'r') as f:
+            conf = json.load(f)['fd_conf']    
+    else:
+        with open("face_vijnana_yolov3.json", 'r') as f:
+            conf = json.load(f)['fd_conf']    
                 
     if conf['mode'] == 'train':        
         fd = FaceDetector(conf)

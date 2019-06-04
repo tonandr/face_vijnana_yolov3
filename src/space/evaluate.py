@@ -21,7 +21,7 @@ DEBUG = True
 
 MODE_CAL_MAP_FD = 'cal_map_fd'
 MODE_CAL_FACE_PAIRS_DISTS = 'cal_face_pairs_dists'
-MODE_CAL_VAR_FAR = 'cal_VAR_FAR'
+MODE_CAL_VAL_FAR = 'cal_VAL_FAR'
 MODE_CAL_ACC_FI = 'cal_acc_fi'
 
 def cal_mAP_fd(gt_path, sol_path, iou_th):
@@ -155,9 +155,9 @@ def cal_face_pairs_dists():
             for i in range(len(file_names) - 1): 
                 for j in range(i + 1, len(file_names)): 
                     same_dists.append(norm(f[file_names[i]].value - f[file_names[j]].value)) 
-
+    
         if DEBUG: print()
-
+    
         # Determine pairs of different face identity randomly.
         idxes = range(len(subject_ids))
         num_pairs = len(subject_ids) // 2
@@ -170,13 +170,13 @@ def cal_face_pairs_dists():
             
             k = pairs[i, 0]
             l = pairs[i, 1]
-
+    
             if subject_ids[k] == -1 or subject_ids[l] == -1:
                 continue            
- 
+    
             ref_df = db_g.get_group(subject_ids[k])
             ref_file_names = list(ref_df.iloc[:, 1])
-
+    
             comp_df = db_g.get_group(subject_ids[l])
             comp_file_names = list(comp_df.iloc[:, 1])
                             
@@ -193,11 +193,11 @@ def cal_face_pairs_dists():
 
     return same_dists, diff_dists
 
-def cal_VAR_FAR(sim_th_range):
+def cal_VAL_FAR(sim_th_range):
     # Calculate distances about same and different face identity pairs.
     same_dists, diff_dists = cal_face_pairs_dists()
     sim_ths = []
-    vars = []
+    vals = []
     fars = []
     
     for sim_th in sim_th_range:
@@ -205,22 +205,22 @@ def cal_VAR_FAR(sim_th_range):
         
         s_r = same_dists <= sim_th
         s_r = s_r.astype(np.int64)
-        vars.append(s_r.sum() / same_dists.shape[0])
+        vals.append(s_r.sum() / same_dists.shape[0])
 
         d_r = diff_dists <= sim_th
         d_r = d_r.astype(np.int64)
         fars.append(d_r.sum() / diff_dists.shape[0])    
 
     sim_ths = np.asarray(sim_ths)
-    vars = np.asarray(vars)
+    vals = np.asarray(vals)
     fars = np.asarray(fars)
 
-    with h5py.File('var_far.h5', 'w') as f:
+    with h5py.File('val_far.h5', 'w') as f:
         f['sim_ths'] = same_dists
-        f['vars'] = vars
+        f['vals'] = vars
         f['fars'] = fars
     
-    return sim_ths, vars, fars
+    return sim_ths, vals, fars
 
 def cal_acc_fi(gt_path, sol_path, iou_th):
     # Confusion matrix's components. 
@@ -290,12 +290,12 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
             j = int(df_p.iloc[1])
             iou = df_p.iloc[2]
             
-            if iou >= iou_th and df.iloc[i, 2] != -1 and rel_sol_df.iloc[j, 2] != -1 \
+            if iou >= iou_th and df.iloc[i, 2] != -1 and rel_sol_df.iloc[j, 1] != -1 \
                 and df.iloc[i, 2] == rel_sol_df.iloc[j, 2]: #?
                 tp += 1
-            elif iou >= iou_th and df.iloc[i, 2] == -1 and rel_sol_df.iloc[j, 2] == -1:
+            elif iou >= iou_th and df.iloc[i, 2] == -1 and rel_sol_df.iloc[j, 1] == -1:
                 tn += 1
-            elif iou >= iou_th and rel_sol_df.iloc[j, 2] != -1 and (df.iloc[i, 2] != rel_sol_df.iloc[j, 2]):
+            elif iou >= iou_th and rel_sol_df.iloc[j, 1] != -1 and (df.iloc[i, 2] != rel_sol_df.iloc[j, 1]):
                 fp += 1
             else:
                 fn += 1
@@ -316,7 +316,7 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
         
         for i in range(rel_sol_df.shape[0]):
             if rel_sol_df.iloc[i, -1] == 1: continue
-            if rel_sol_df.iloc[i, 2] == -1:
+            if rel_sol_df.iloc[i, 1] == -1:
                 tn += 1 # Right?
             else:
                 fp += 1 # Right?
@@ -335,8 +335,9 @@ def main(args):
         rs_ls = []
         mAP_ls = []
         
-        for iou_th in range(0.5, 1.0, 0.05):
+        for iou_th in np.arange(0.5, 1.0, 0.05):
             ps, rs, mAP = cal_mAP_fd(gt_path, sol_path, iou_th)
+            if DEBUG: print('{0:1.2f}'.format(iou_th), mAP)
             ps_ls.append(ps)
             rs_ls.append(rs)
             mAP_ls.append(mAP)
@@ -351,9 +352,9 @@ def main(args):
             f['mAP_ls'] = mAP_ls
     elif mode == MODE_CAL_FACE_PAIRS_DISTS:
         cal_face_pairs_dists()
-    elif mode == MODE_CAL_VAR_FAR:
+    elif mode == MODE_CAL_VAL_FAR:
         sim_th_range = np.arange(0.1, 1.1, 0.1)
-        cal_VAR_FAR(sim_th_range)
+        cal_VAL_FAR(sim_th_range)
     elif mode == MODE_CAL_ACC_FI:
         tp_ls = []
         fp_ls = []
@@ -362,8 +363,9 @@ def main(args):
         acc_ls = []
         
         for iou_th in np.arange(0.5, 1.0, 0.05):
-            if DEBUG: print(iou_th)
             tp, fp, tn, fn, acc = cal_acc_fi(gt_path, sol_path, iou_th)
+            if DEBUG: print('{0:1.2f}'.format(iou_th), tp, fp, tn, fn, acc)
+            
             tp_ls.append(tp)
             fp_ls.append(fp)
             tn_ls.append(tn)
