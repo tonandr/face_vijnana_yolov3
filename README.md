@@ -43,9 +43,9 @@ Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 
 
 ### Download the face recognition git repository
 
-```git clone https://github.com/tonandr/face_recog_yolov3.git```
+```git clone https://github.com/tonandr/face_vijnana_yolov3.git```
 
-```cd face_recog_yolov3\src\space```
+```cd face_vijnana_yolov3\src\space```
 
 ### Download yolov3 pretrained model weight
 
@@ -127,7 +127,7 @@ It is assumed that 4 Tesla K80 GPUs are provided. You should set mode to "train"
 ```python face_detection.py```
 
 You can download [the pretrained face detection Keras model](https://drive.google.com/open?id=1pzGO4YyR46VaMLNeP4_462vWWydAAnYG).
-It should be moved into face_recog_yolov3/src/space.
+It should be moved into face_vijnana_yolov3/src/space.
 
 We have trained it as follows with previous configurations. You can configure them as a new configuration format and train the model.
 
