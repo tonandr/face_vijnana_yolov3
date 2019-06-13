@@ -178,7 +178,7 @@ After getting the face detection solution file of solution_fd.csv, mAP could be 
 the result is saved in p_r_curve.h5 as the hdf5 format, so you load it and analyze the performance.
 
 ### Current face detection performance
-![Imgur](recog_samples/p_v_curve.png)
+![Imgur](pics/p_v_curve.png)
 
 We have evaluated face vijnana yolov3's face detection performance with the UCCS dataset. Yet, the model wasn't trained until saturation, so via training more, the performance can be enhanced.
 
