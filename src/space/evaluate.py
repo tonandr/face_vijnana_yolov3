@@ -28,12 +28,12 @@ def cal_mAP_fd(gt_path, sol_path, iou_th):
     # Load ground truth, predicted results and calculate IoU.
     sol_df = pd.read_csv(sol_path, header=None)
     sol_df = pd.concat([sol_df, pd.DataFrame(np.zeros(shape=(sol_df.shape[0]), dtype=np.float64), columns=[6])], axis=1) # IoU
-    sol_df.iloc[:, 6] = -1.0
+    sol_df.iat[:, 6] = -1.0
     sol_df_g = sol_df.groupby(0) #?
         
     gt_df = pd.read_csv(gt_path)
     gt_df = pd.concat([gt_df, pd.DataFrame(np.zeros(shape=(gt_df.shape[0]), dtype=np.float64), columns=[7])], axis=1) # IoU
-    gt_df.iloc[:, 7] = -1.0
+    gt_df.iat[:, 7] = -1.0
     gt_df_g = gt_df.groupby('FILE') #?
     
     for k, image_id in enumerate(list(gt_df_g.groups.keys())):
@@ -50,10 +50,10 @@ def cal_mAP_fd(gt_path, sol_path, iou_th):
         for i in range(df.shape[0]):
             gt_ious[i] = []
             gt_sample = df.iloc[i]
-            gt_sample_bb = BoundBox(gt_sample[3]
-                                      , gt_sample[4]
-                                      , gt_sample[3] + gt_sample[5]
-                                      , gt_sample[4] + gt_sample[6])
+            gt_sample_bb = BoundBox(gt_sample.iloc[3]
+                                      , gt_sample.iloc[4]
+                                      , gt_sample.iloc[3] + gt_sample.iloc[5]
+                                      , gt_sample.iloc[4] + gt_sample.iloc[6])
                     
             # Check exception.
             if rel_sol_df.shape[0] == 0: continue
@@ -88,8 +88,8 @@ def cal_mAP_fd(gt_path, sol_path, iou_th):
             j = int(df_p.iloc[1])
             iou = df_p.iloc[2]
             
-            #df.iloc[i, -1] = iou 
-            rel_sol_df.iloc[j, -1] = iou 
+            #df.iat[i, -1] = iou 
+            rel_sol_df.iat[j, -1] = iou 
             
             # Remove assigned samples.
             total_gt_ious_df = total_gt_ious_df[total_gt_ious_df[0] != i]
@@ -238,6 +238,7 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
     gt_df = pd.concat([gt_df, pd.DataFrame(np.zeros(shape=(gt_df.shape[0]), dtype=np.float64), columns=[7])], axis=1) # IoU
     gt_df_g = gt_df.groupby('FILE') #?
     
+    print(iou_th)
     for k, image_id in enumerate(list(gt_df_g.groups.keys())):
         print(k, '/', len(gt_df_g.groups.keys()), ':', image_id, end='\r')
         df = gt_df_g.get_group(image_id)
@@ -245,6 +246,12 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
         try:
             rel_sol_df = sol_df_g.get_group(image_id)
         except KeyError:
+            for i in range(df.shape[0]):
+                if df.iloc[i, 2] == -1:
+                    tn += 1 # Right?
+                else:
+                    fn += 1 # Right?        
+                    
             continue
         
         gt_ious = {}
@@ -252,14 +259,11 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
         for i in range(df.shape[0]):
             gt_ious[i] = []
             gt_sample = df.iloc[i]
-            gt_sample_bb = BoundBox(gt_sample[3]
-                                      , gt_sample[4]
-                                      , gt_sample[3] + gt_sample[5]
-                                      , gt_sample[4] + gt_sample[6])
-                    
-            # Check exception.
-            if rel_sol_df.shape[0] == 0: continue
-        
+            gt_sample_bb = BoundBox(gt_sample.iloc[3]
+                                      , gt_sample.iloc[4]
+                                      , gt_sample.iloc[3] + gt_sample.iloc[5]
+                                      , gt_sample.iloc[4] + gt_sample.iloc[6])
+                           
             # Calculate IoUs between a gt region and detected regions
             for j in range(rel_sol_df.shape[0]):
                 rel_sol = rel_sol_df.iloc[j]
@@ -291,17 +295,17 @@ def cal_acc_fi(gt_path, sol_path, iou_th):
             iou = df_p.iloc[2]
             
             if iou >= iou_th and df.iloc[i, 2] != -1 and rel_sol_df.iloc[j, 1] != -1 \
-                and df.iloc[i, 2] == rel_sol_df.iloc[j, 2]: #?
+                and df.iloc[i, 2] == rel_sol_df.iloc[j, 1]: #?
                 tp += 1
-            elif iou >= iou_th and df.iloc[i, 2] == -1 and rel_sol_df.iloc[j, 1] == -1:
-                tn += 1
             elif iou >= iou_th and rel_sol_df.iloc[j, 1] != -1 and (df.iloc[i, 2] != rel_sol_df.iloc[j, 1]):
                 fp += 1
+            elif df.iloc[i, 2] == -1:
+                tn += 1
             else:
                 fn += 1
             
-            df.iloc[i, -1] = 1    
-            rel_sol_df.iloc[j, -1] = 1 # Checking flag.
+            df.iat[i, -1] = 1    
+            rel_sol_df.iat[j, -1] = 1 # Checking flag.
             
             # Remove assigned samples.
             total_gt_ious_df = total_gt_ious_df[total_gt_ious_df[0] != i]
@@ -364,7 +368,7 @@ def main(args):
         
         for iou_th in np.arange(0.5, 1.0, 0.05):
             tp, fp, tn, fn, acc = cal_acc_fi(gt_path, sol_path, iou_th)
-            if DEBUG: print('{0:1.2f}'.format(iou_th), tp, fp, tn, fn, acc)
+            if DEBUG: print('\n{0:1.2f}'.format(iou_th), tp, fp, tn, fn, acc)
             
             tp_ls.append(tp)
             fp_ls.append(fp)

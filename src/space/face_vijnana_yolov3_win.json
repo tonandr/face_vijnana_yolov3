@@ -30,10 +30,10 @@
 	},
 	
 	"fi_conf": {
-		"mode": "evaluate",
+		"mode": "test",
 		"raw_data_path": "D:\\topcoder\\face_recog\\resource\\training",
 		"test_path": "D:\\topcoder\\face_recog\\resource\\validation",
-		"output_file_path": "solution_fi.csv",
+		"output_file_path": "solution_fi_01.csv",
 		"multi_gpu": false,
 		"num_gpus": 4,
 		"yolov3_base_model_load": true,
@@ -45,7 +45,7 @@
 			"epochs": 1,
 			"step": 1,
 			"batch_size": 1,
-			"sim_th": 0.2,
+			"sim_th": 0.4,
 			"face_conf_th": 0.5
 		},
 			

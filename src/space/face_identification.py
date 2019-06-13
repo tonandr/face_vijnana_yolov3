@@ -46,12 +46,13 @@ from scipy.linalg import norm
 import h5py
 
 from keras.models import Model, load_model
-from keras.layers import Input, Dense, Lambda, ZeroPadding2D, LeakyReLU, Flatten, Concatenate
+from keras.layers import Input, Dense, Lambda, ZeroPadding2D, LeakyReLU, Flatten, Concatenate, Reshape 
 from keras.layers.merge import add
 from keras.utils import multi_gpu_model
 from keras.utils.data_utils import Sequence
 import keras.backend as K
 from keras import optimizers
+from keras.engine.input_layer import InputLayer
 
 from yolov3_detect import make_yolov3_model, BoundBox, WeightReader, draw_boxes_v3
 from face_detection import FaceDetector
@@ -1082,6 +1083,56 @@ class FaceIdentifier(object):
                 # Check exception.
                 if len(boxes) == 0:
                     continue
+
+    def create_face_reconst_model(self):
+        """Create the face reconstruction model."""
+        if hasattr(self, 'model') != True or isinstance(self.model, Model) != True:
+            raise ValueError('A valid model instance doesn\'t exist.')
+        
+        # Get all layers and extract input layers and output layers.
+        layers = self.model.layers()
+        input_layers = [layer for layer in layers if isinstance(layer, InputLayer) == True]
+        output_layer_names = [t.name.split('/')[0] for t in self.model.outputs]
+        output_layers = [layer for layer in layer if layer.name in output_layer_names]
+        
+        # Input.
+        input1 = Input(shape=(output_layers[0].output_shape[1], ), name='input1')
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1), name='l2_norm_layer')(input1) #?       
+        x = Dense(self.model.get_layer('dense1').input_shape[1]
+                  , activation= self.model_get_layer('dense1').activation
+                  , name='dense1')(x)
+        
+        # Yolov3.          
+        base = self.model.get_layer('base')          
+        x = Reshape(base.output_shape[1:])(x)
+        
+        # 63 ~ 73.
+        '''
+        for i in range(63, 73, 3):
+            conv_layer = yolov3.get_layer('conv_' + str(i))
+            
+            if conv_layer.kernel_size[0] > 1:
+                x = ZeroPadding2D(1)(x) #? 
+              
+            x = conv_layer(x)
+            norm_layer = yolov3.get_layer('bnorm_' + str(i))
+            x = norm_layer(x)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            conv_layer = yolov3.get_layer('conv_' + str(i + 1))
+            
+            if conv_layer.kernel_size[0] > 1:
+                x = ZeroPadding2D(1)(x) #? 
+              
+            x = conv_layer(x)
+            norm_layer = yolov3.get_layer('bnorm_' + str(i + 1))
+            x = norm_layer(x)
+            x = LeakyReLU(alpha=0.1)(x)
+            
+            x = add([skip, x]) #?
+            skip = x #?
+        '''        
+                
                 
 def main():
     """Main."""
