@@ -1,7 +1,6 @@
 # Face vijnana yolov3
 ## Face recognition Keras model using yolov3 as a base model and a pretrained model, including face detection and face identification
-![Imgur](recog_samples/014bf8ede65b5b52ac83f00b7cd6e2f9_detected.jpg)
-![Imgur](recog_samples/01c2ee2fdfddb91abd41e8b31033d40a_detected.jpg)
+![Imgur](pics/01c2ee2fdfddb91abd41e8b31033d40a_detected.jpg)
 
 Using the pretranied [yolov3 Keras model](https://github.com/experiencor/keras-yolo3), we develop one shot learning face recognition model using Keras.
 The face recognition model consists of face detection and face identification models, and using uncontrained college students face dataset provided by 
@@ -12,8 +11,7 @@ in the face identification model, we have developed referring to [FaceNet: A Uni
 # Tasks
 - [x] Develop face vijnana yolov3.
 - [x] Train and evaluate face detetor with the UCCS dataset.
-- [ ] Train and evaluate face identifier with the UCCS dataset.
-- [ ] Optimize face identifier via unsupervised learning with the UCCS dataset.
+- [ ] Train and evaluate face identifier using [a GAN style-based face generator](https://github.com/NVlabs/stylegan) with the UCCS dataset.
 - [ ] Train, evaluate and optimize face vijnana yolov3 with other datasets.
 
 ## Test environments
@@ -179,7 +177,7 @@ After getting the face detection solution file of solution_fd.csv, mAP could be 
 the result is saved in p_r_curve.h5 as the hdf5 format, so you load it and analyze the performance.
 
 ### Current face detection performance
-![Imgur](recog_samples/p_v_curve.png)
+![Imgur](pics/p_v_curve.png)
 
 We have evaluated face vijnana yolov3's face detection performance with the UCCS dataset. Yet, the model wasn't trained until saturation, so via training more, the performance can be enhanced.
 
@@ -216,6 +214,6 @@ We have evaluated face vijnana yolov3's face detection performance with the UCCS
 </tbody>
 </table>
 
-There are [face detection result images](https://1drv.ms/u/s!AncLOWf4gH95jFLSu_9rb6p2TNq7?e=d9CFWs).
+There are [face detection result images](https://drive.google.com/open?id=1JelgyzOEN1WNXUl1HKIY2eH_yEcaJ7fA).
 ## Face identification performance
 TODO
