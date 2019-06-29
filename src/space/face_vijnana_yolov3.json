@@ -37,6 +37,7 @@
 		"multi_gpu": false,
 		"num_gpus": 4,
 		"yolov3_base_model_load": true,
+		"face_vijana_recon_load": false,
 		"hps": {
 			"lr": 0.001,
 			"beta_1": 0.99,

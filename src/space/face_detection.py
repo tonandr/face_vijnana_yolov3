@@ -402,7 +402,7 @@ class FaceDetector(object):
         weight_reader.load_weights(yolov3)
         
         # Make a base model.
-        input1 = Input(shape=(self.nn_arch['image_size'], self.nn_arch['image_size'], 3))
+        input1 = Input(shape=(self.nn_arch['image_size'], self.nn_arch['image_size'], 3), name='input1')
         
         # 0 ~ 1.
         conv_layer = yolov3.get_layer('conv_' + str(0))
@@ -420,8 +420,8 @@ class FaceDetector(object):
         x = LeakyReLU(alpha=0.1)(x)
         skip = x
         
-        # 2 ~ 3.
-        for i in range(2, 4, 2):
+        # 2 ~ 4.
+        for i in range(2, 4, 2): #?
             conv_layer = yolov3.get_layer('conv_' + str(i))
             
             if conv_layer.kernel_size[0] > 1:
@@ -593,7 +593,7 @@ class FaceDetector(object):
             skip = x #?
         
         output = x
-        base = Model(inputs=[input], outputs=[output])
+        base = Model(inputs=[input1], outputs=[output])
         base.trainable = True
         base.save('yolov3_base.h5')
         
