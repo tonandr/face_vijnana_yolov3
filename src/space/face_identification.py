@@ -188,7 +188,7 @@ class FaceIdentifier(object):
                 self.raw_data_path = raw_data_path
                 self.hps = hps
                 self.nn_arch = nn_arch
-                self.db = pd.read_csv('db.csv')
+                self.db = pd.read_csv('subject_image_db.csv')
                 self.db = self.db.iloc[:, 1:]
 
                 self.batch_size = self.hps['batch_size']
@@ -200,7 +200,7 @@ class FaceIdentifier(object):
                 # Create indexing data of positive and negative cases.
                 self.raw_data_path = raw_data_path
                 self.hps = hps
-                self.db = pd.read_csv('db.csv')
+                self.db = pd.read_csv('subject_image_db.csv')
                 self.db = self.db.iloc[:, 1:]
                 self.t_indexes = np.asarray(self.db.index)
                 self.db_g = self.db.groupby('subject_id')
