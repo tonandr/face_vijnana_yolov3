@@ -10,7 +10,7 @@ in the face identification model, we have developed referring to [FaceNet: A Uni
 
 # Tasks
 - [x] Develop face vijnana yolov3.
-- [x] Train and evaluate face detetor with the UCCS dataset.
+- [x] Train and evaluate face detector with the UCCS dataset.
 - [ ] Train and evaluate face identifier using [a GAN style-based face generator](https://github.com/NVlabs/stylegan) with the UCCS dataset.
 - [ ] Train, evaluate and optimize face vijnana yolov3 with other datasets.
 
