@@ -14,6 +14,10 @@ in the face identification model, we have developed referring to [FaceNet: A Uni
 - [ ] Train and evaluate face identifier using [a GAN style-based face generator](https://github.com/NVlabs/stylegan) with the UCCS dataset.
 - [ ] Train, evaluate and optimize face vijnana yolov3 with other datasets.
 
+## Tasks status
+
+[Style based GAN is being developed for virtual face generation](https://github.com/tonandr/keras_unsupervised/tree/master/examples/style_based_gan)
+
 ## Test environments
 The face recognition model has been developed and tested on Linux(Ubuntu 16.04.6 LTS), Anaconda 4.6.11, Python 3.6.8, 
 Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 x NVIDIA Tesla K80 GPUs.
