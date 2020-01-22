@@ -10,9 +10,13 @@ in the face identification model, we have developed referring to [FaceNet: A Uni
 
 # Tasks
 - [x] Develop face vijnana yolov3.
-- [x] Train and evaluate face detetor with the UCCS dataset.
+- [x] Train and evaluate face detector with the UCCS dataset.
 - [ ] Train and evaluate face identifier using [a GAN style-based face generator](https://github.com/NVlabs/stylegan) with the UCCS dataset.
 - [ ] Train, evaluate and optimize face vijnana yolov3 with other datasets.
+
+## Tasks status
+
+[Style based GAN is being developed for virtual face generation](https://github.com/tonandr/keras_unsupervised/tree/master/examples/style_based_gan)
 
 ## Test environments
 The face recognition model has been developed and tested on Linux(Ubuntu 16.04.6 LTS), Anaconda 4.6.11, Python 3.6.8, 
