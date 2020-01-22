@@ -30,9 +30,10 @@
 	},
 	
 	"fi_conf": {
-		"mode": "test",
-		"raw_data_path": "D:\\topcoder\\face_recog\\resource\\training",
-		"test_path": "D:\\topcoder\\face_recog\\resource\\validation",
+		"mode": "data",
+		"resource_type": "vggface2",
+		"raw_data_path": "D:\\usr\\vggface2",
+		"test_path": "D:\\usr\\vggface2",
 		"output_file_path": "solution_fi_01.csv",
 		"multi_gpu": false,
 		"num_gpus": 4,

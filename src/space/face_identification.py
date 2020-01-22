@@ -44,6 +44,8 @@ import cv2 as cv
 from skimage.io import imread, imsave
 from scipy.linalg import norm
 import h5py
+import matplotlib.pyplot as plt
+import ipyparallel as ipp
 
 from keras.models import Model, load_model
 from keras.layers import Input, Dense, Lambda, ZeroPadding2D
@@ -64,6 +66,9 @@ DEBUG = True
 
 ALPHA = 0.2
 
+RESOURCE_TYPE_UCCS = 'uccs'
+RESOURCE_TYPE_VGGFACE2 = 'vggface2'
+
 def triplet_loss(y_true, y_pred):
     # Calculate the difference of both face features and judge a same person.
     x = y_pred
@@ -74,219 +79,201 @@ def create_db_fi(conf):
     """Create db for face identifier."""
     conf = conf['fi_conf']
     
-    raw_data_path = conf['raw_data_path']
-    nn_arch = conf['nn_arch']
-    
-    if not os.path.isdir(os.path.join('subject_faces')):
-        os.mkdir(os.path.join('subject_faces'))
-    else:
-        shutil.rmtree(os.path.join('subject_faces'))
-        os.mkdir(os.path.join(os.path.join('subject_faces')))    
-
-    gt_df = pd.read_csv(os.path.join(raw_data_path, 'training', 'training.csv'))
-    gt_df_g = gt_df.groupby('SUBJECT_ID')
-    
-    # Collect face region images and create db, by subject ids.
-    db = pd.DataFrame(columns=['subject_id', 'face_file', 'w', 'h'])
-    
-    for k in gt_df_g.groups.keys():
-        if k == -1: continue
-        df = gt_df_g.get_group(k)
+    if conf['resource_type'] == RESOURCE_TYPE_UCCS:
+        raw_data_path = conf['raw_data_path']
+        nn_arch = conf['nn_arch']
         
-        for i in range(df.shape[0]):
-            file_name = df.iloc[i, 1]
+        if not os.path.isdir(os.path.join(raw_data_path, 'subject_faces')):
+            os.mkdir(os.path.join(raw_data_path, 'subject_faces'))
+        else:
+            shutil.rmtree(os.path.join(raw_data_path, 'subject_faces'))
+            os.mkdir(os.path.join(os.path.join(raw_data_path, 'subject_faces')))    
+    
+        gt_df = pd.read_csv(os.path.join(raw_data_path, 'training', 'training.csv'))
+        gt_df_g = gt_df.groupby('SUBJECT_ID')
+        
+        # Collect face region images and create db, by subject ids.
+        db = pd.DataFrame(columns=['subject_id', 'face_file', 'w', 'h'])
+        
+        for k in gt_df_g.groups.keys():
+            if k == -1: continue
+            df = gt_df_g.get_group(k)
             
-            # Load an image.
-            image = cv.imread(os.path.join(raw_data_path, 'training', file_name))
-            
-            # Check exception.
-            res = df.iloc[i, 3:] > 0
-            if res.all() == False:
-                continue
-            
-            r = image[:, :, 0].copy()
-            g = image[:, :, 1].copy()
-            b = image[:, :, 2].copy()
-            image[:, :, 0] = b
-            image[:, :, 1] = g
-            image[:, :, 2] = r
+            for i in range(df.shape[0]):
+                file_name = df.iloc[i, 1]
+                
+                # Load an image.
+                image = imread(os.path.join(raw_data_path, 'training', file_name))
+                
+                # Check exception.
+                res = df.iloc[i, 3:] > 0
+                if res.all() == False:
+                    continue
+                                            
+                # Crop a face region.
+                l, t, r, b = (int(df.iloc[i, 3])
+                    , int(df.iloc[i, 4])
+                    , int((df.iloc[i, 3] + df.iloc[i, 5] - 1))
+                    , int((df.iloc[i, 4] + df.iloc[i, 6] - 1)))
+    
                         
-            # Crop a face region.
-            l, t, r, b = (int(df.iloc[i, 3])
-                , int(df.iloc[i, 4])
-                , int((df.iloc[i, 3] + df.iloc[i, 5] - 1))
-                , int((df.iloc[i, 4] + df.iloc[i, 6] - 1)))
-
+                image = image[(t - 1):(b - 1), (l - 1):(r - 1), :]
+                
+                # Adjust the original image size into the normalized image size according to the ratio of width, height.
+                w = image.shape[1]
+                h = image.shape[0]
+                pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                                
+                if w >= h:
+                    w_p = nn_arch['image_size']
+                    h_p = int(h / w * nn_arch['image_size'])
+                    pad = nn_arch['image_size'] - h_p
                     
-            image = image[(t - 1):(b - 1), (l - 1):(r - 1), :]
+                    if pad % 2 == 0:
+                        pad_t = pad // 2
+                        pad_b = pad // 2
+                    else:
+                        pad_t = pad // 2
+                        pad_b = pad // 2 + 1
+                     
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_NEAREST)
+                    image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+                else:
+                    h_p = nn_arch['image_size']
+                    w_p = int(w / h * nn_arch['image_size'])
+                    pad = nn_arch['image_size'] - w_p
+                    
+                    if pad % 2 == 0:
+                        pad_l = pad // 2
+                        pad_r = pad // 2
+                    else:
+                        pad_l = pad // 2
+                        pad_r = pad // 2 + 1                
+                    
+                    image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_NEAREST)
+                    image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                
             
-            # Adjust the original image size into the normalized image size according to the ratio of width, height.
-            w = image.shape[1]
-            h = image.shape[0]
-            pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
-                            
-            if w >= h:
-                w_p = nn_arch['image_size']
-                h_p = int(h / w * nn_arch['image_size'])
-                pad = nn_arch['image_size'] - h_p
+                # Write a face region image.
+                face_file_name = file_name[:-4] + '_' + str(k) + '_' \
+                    + str(int(df.iloc[i, 3])) + '_' + str(int(df.iloc[i, 4])) + file_name[-4:]
+                    
+                print('Save ' + face_file_name)
+                imsave(os.path.join(raw_data_path, 'subject_faces', face_file_name), (image).astype('uint8'))           
                 
-                if pad % 2 == 0:
-                    pad_t = pad // 2
-                    pad_b = pad // 2
-                else:
-                    pad_t = pad // 2
-                    pad_b = pad // 2 + 1
-                 
-                image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
-            else:
-                h_p = nn_arch['image_size']
-                w_p = int(w / h * nn_arch['image_size'])
-                pad = nn_arch['image_size'] - w_p
-                
-                if pad % 2 == 0:
-                    pad_l = pad // 2
-                    pad_r = pad // 2
-                else:
-                    pad_l = pad // 2
-                    pad_r = pad // 2 + 1                
-                
-                image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_CUBIC)
-                image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                
+                # Add subject face information into db.
+                db = pd.concat([db, pd.DataFrame({'subject_id': [k]
+                                                      , 'face_file': [face_file_name]
+                                                      , 'w': [w]
+                                                      , 'h': [h]})])
+        # Save db.
+        db.to_csv('subject_image_db.csv')
+    elif conf['resource_type'] == RESOURCE_TYPE_VGGFACE2:        
+        raw_data_path = conf['raw_data_path']
+        nn_arch = conf['nn_arch']
         
-            # Write a face region image.
-            face_file_name = file_name[:-4] + '_' + str(k) + '_' \
-                + str(int(df.iloc[i, 3])) + '_' + str(int(df.iloc[i, 4])) + file_name[-4:]
-                
-            print('Save ' + face_file_name)
-            imsave(os.path.join('subject_faces', face_file_name), (image).astype('uint8'))           
+        if not os.path.isdir(os.path.join(raw_data_path, 'subject_faces_vggface2')):
+            os.mkdir(os.path.join(raw_data_path, 'subject_faces_vggface2'))
+        else:
+            shutil.rmtree(os.path.join(raw_data_path, 'subject_faces_vggface2'))
+            os.mkdir(os.path.join(os.path.join(raw_data_path, 'subject_faces_vggface2')))    
+    
+        df = pd.read_csv(os.path.join(raw_data_path, 'loose_bb_train.csv'))
+        
+        # Collect face region images and create db, by subject ids.
+        pClient = ipp.Client()
+        pView = pClient.load_balanced_view() #pClient[:]
+        
+        pView.push({'raw_data_path': raw_data_path, 'nn_arch': nn_arch})
+        
+        with pView.sync_imports():
+            import numpy as np
+            import pandas as pd
+            import cv2 as cv
+            from skimage.io import imread, imsave
+        
+        db = pd.DataFrame(columns=['subject_id', 'face_file', 'w', 'h'])
+        dfs = [df.iloc[i] for i in range(df.shape[0])]
+        
+        res = pView.map_sync(save_extracted_face, dfs)
+        db = pd.concat(res)
             
-            # Add subject face information into db.
-            db = pd.concat([db, pd.DataFrame({'subject_id': [k]
-                                                  , 'face_file': [face_file_name]
-                                                  , 'w': [w]
-                                                  , 'h': [h]})])
-    # Save db.
-    db.to_csv('subject_image_db.csv')
+        # Save db.
+        db.to_csv('subject_image_vggface2_db.csv')
+    else:
+        raise ValueError('resource type is not valid.')
+    
+def save_extracted_face(df):
+    global raw_data_path, nn_arch
+    import os
+    
+    id_filename = df.iloc[0].split('/')
+    identity = id_filename[0]
+    file_name = id_filename[1] + '.jpg'
+    x = df.iloc[1]
+    y = df.iloc[2]
+    w = df.iloc[3]
+    h = df.iloc[4]
+    
+    if x < 0 or y < 0 or w <=0 or h <=0:
+        continue
+    
+    # Load an image.
+    image = imread(os.path.join(raw_data_path, 'train', identity, file_name))
+    
+    # Get a face region.                
+    image = image[y:(y + h), x:(x + w), :]
+    
+    # Adjust the original image size into the normalized image size according to the ratio of width, height.
+    w = image.shape[1]
+    h = image.shape[0]
+    pad_t, pad_b, pad_l, pad_r = 0, 0, 0, 0
+                    
+    if w >= h:
+        w_p = nn_arch['image_size']
+        h_p = int(h / w * nn_arch['image_size'])
+        pad = nn_arch['image_size'] - h_p
+        
+        if pad % 2 == 0:
+            pad_t = pad // 2
+            pad_b = pad // 2
+        else:
+            pad_t = pad // 2
+            pad_b = pad // 2 + 1
+         
+        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_NEAREST)
+        image = cv.copyMakeBorder(image, pad_t, pad_b, 0, 0, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?  
+    else:
+        h_p = nn_arch['image_size']
+        w_p = int(w / h * nn_arch['image_size'])
+        pad = nn_arch['image_size'] - w_p
+        
+        if pad % 2 == 0:
+            pad_l = pad // 2
+            pad_r = pad // 2
+        else:
+            pad_l = pad // 2
+            pad_r = pad // 2 + 1                
+        
+        image = cv.resize(image, (w_p, h_p), interpolation=cv.INTER_NEAREST)
+        image = cv.copyMakeBorder(image, 0, 0, pad_l, pad_r, cv.BORDER_CONSTANT, value=[0, 0, 0]) # 416x416?                
+
+    # Write a face region image.
+    face_file_name = identity + '_' + file_name
+        
+    print('Save ' + face_file_name)
+    imsave(os.path.join(raw_data_path, 'subject_faces_vggface2', face_file_name), (image).astype('uint8'))           
+    
+    # Add subject face information into db.
+    return pd.DataFrame({'subject_id': [identity]
+                                          , 'face_file': [face_file_name]
+                                          , 'w': [w]
+                                          , 'h': [h]})
             
 class FaceIdentifier(object):
     """Face identifier to use yolov3."""
     
     # Constants.
     MODEL_PATH = 'face_identifier.h5'
-
-    class TrainingSequence(Sequence):
-        """Training data set sequence."""
-        
-        def __init__(self, raw_data_path, hps, nn_arch, load_flag=True):
-            if load_flag:
-                with open('img_triplet_pairs.pickle', 'rb') as f:
-                    self.img_triplet_pairs = pickle.load(f)
-                    self.img_triplet_pairs = self.img_triplet_pairs
-                    
-                # Create indexing data of positive and negative cases.
-                self.raw_data_path = raw_data_path
-                self.hps = hps
-                self.nn_arch = nn_arch
-                self.db = pd.read_csv('subject_image_db.csv')
-                self.db = self.db.iloc[:, 1:]
-
-                self.batch_size = self.hps['batch_size']
-                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
-                
-                if len(self.img_triplet_pairs) % self.batch_size != 0:
-                    self.hps['step'] +=1    
-            else:    
-                # Create indexing data of positive and negative cases.
-                self.raw_data_path = raw_data_path
-                self.hps = hps
-                self.db = pd.read_csv('subject_image_db.csv')
-                self.db = self.db.iloc[:, 1:]
-                self.t_indexes = np.asarray(self.db.index)
-                self.db_g = self.db.groupby('subject_id')
-                
-                self.img_triplet_pairs = []
-                valid_indexes = self.t_indexes
-                
-                for i in self.db_g.groups.keys():                
-                    df = self.db_g.get_group(i)
-                    ex_indexes2 = np.asarray(df.index)
-                    
-                    ex_inv_idxes = []
-                    for v in valid_indexes: 
-                        if (ex_indexes2 == v).any():
-                            ex_inv_idxes.append(False)
-                        else:
-                            ex_inv_idxes.append(True)
-                    ex_inv_idxes = np.asarray(ex_inv_idxes)
-                    valid_indexes2 = valid_indexes[ex_inv_idxes]   
-                    
-                    # Triplet sample pair.
-                    for k in range(0, ex_indexes2.shape[0] - 1):
-                        for l in range(k + 1, ex_indexes2.shape[0]):
-                            self.img_triplet_pairs.append((ex_indexes2[k]
-                                                   , ex_indexes2[l]
-                                                   , np.random.choice(valid_indexes2, size=1)[0])) 
-                
-                self.batch_size = self.hps['batch_size']
-                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
-                
-                if len(self.img_triplet_pairs) % self.batch_size != 0:
-                    self.hps['step'] +=1
-                
-                # Shuffle image pairs.
-                shuffle(self.img_triplet_pairs)
-                
-                with open('img_triplet_pairs.pickle', 'wb') as f:
-                    pickle.dump(self.img_triplet_pairs, f)
-                
-        def __len__(self):
-            return self.hps['step']
-        
-        def __getitem__(self, index):
-            images_a = []
-            images_p = []
-            images_n = []
-            
-            # Check the last index.
-            if index == (self.hps['step'] - 1):
-                for bi in range(index * self.batch_size, len(self.img_triplet_pairs)):
-                    # Get the anchor and comparison images.
-                    image_a = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
-                    image_p = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
-                    image_n = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
-                    
-                    images_a.append(image_a/255)
-                    images_p.append(image_p/255)
-                    images_n.append(image_n/255)
-            
-            else:
-                for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
-                    # Get the anchor and comparison images.
-                    image_a = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
-                    image_p = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
-                    image_n = cv.imread(os.path.join(self.raw_data_path
-                                                     , 'subject_faces'
-                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
-                    
-                    images_a.append(image_a/255)
-                    images_p.append(image_p/255)
-                    images_n.append(image_n/255)                 
-                                                                                                                     
-            return ({'input_a': np.asarray(images_a)
-                     , 'input_p': np.asarray(images_p)
-                     , 'input_n': np.asarray(images_n)}
-                     , {'output': np.zeros(shape=(len(images_a), 192))}) 
 
     def __init__(self, conf):
         """
@@ -618,7 +605,12 @@ class FaceIdentifier(object):
         
     def train(self):
         """Train face detector."""
-        trGen = self.TrainingSequence(self.raw_data_path, self.hps, self.nn_arch, load_flag=False)
+        if self.conf['resource_type'] == RESOURCE_TYPE_UCCS:
+            trGen = self.TrainingSequence(self.raw_data_path, self.hps, self.nn_arch, load_flag=False)
+        elif self.conf['resource_type'] == RESOURCE_TYPE_VGGFACE2:
+            trGen = self.TrainingSequenceVGGFace2(self.raw_data_path, self.hps, self.nn_arch, load_flag=False)
+        else:
+            raise ValueError('resource type is not valid.')
         
         if self.conf['multi_gpu']:
             self.parallel_model.fit_generator(trGen
@@ -642,11 +634,69 @@ class FaceIdentifier(object):
   
     def make_facial_ids_db(self):
         """Make facial ids database."""
-        db = pd.read_csv('subject_image_db.csv')
-        db = db.iloc[:, 1:]
-        db_g = db.groupby('subject_id')
-
-        with h5py.File('subject_facial_ids.h5', 'w') as f:
+        if self.conf['resource_type'] == RESOURCE_TYPE_UCCS:
+            db = pd.read_csv('subject_image_db.csv')
+            db = db.iloc[:, 1:]
+            db_g = db.groupby('subject_id')
+    
+            with h5py.File('subject_facial_ids.h5', 'w') as f:
+                for subject_id in db_g.groups.keys():
+                    if subject_id == -1:
+                        continue
+                    
+                    # Get face images of a subject id.
+                    df = db_g.get_group(subject_id)
+                    images = []
+                    
+                    for ff in list(df.iloc[:, 1]):
+                        image = imread(os.path.join(self.raw_data_path, 'subject_faces', ff))
+                        images.append(image/255)
+                    
+                    images = np.asarray(images)
+                    
+                    # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
+                    facial_ids = self.fid_extractor.predict(images)
+    
+                    for k, ff in enumerate(list(df.iloc[:, 1])):
+                        f[ff] = facial_ids[k]
+                        f[ff].attrs['subject_id'] = subject_id
+        elif self.conf['resource_type'] == RESOURCE_TYPE_VGGFACE2:
+            db = pd.read_csv('subject_image_vggface2_db.csv')
+            db = db.iloc[:, 1:]
+            db_g = db.groupby('subject_id')
+    
+            with h5py.File('subject_facial_vggface2_ids.h5', 'w') as f:
+                for subject_id in db_g.groups.keys():
+                    if subject_id == -1:
+                        continue
+                    
+                    # Get face images of a subject id.
+                    df = db_g.get_group(subject_id)
+                    images = []
+                    
+                    for ff in list(df.iloc[:, 1]):
+                        image = imread(os.path.join(self.raw_data_path, 'subject_faces_vggface2', ff)) #?
+                        images.append(image/255)
+                    
+                    images = np.asarray(images)
+                    
+                    # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
+                    facial_ids = self.fid_extractor.predict(images)
+    
+                    for k, ff in enumerate(list(df.iloc[:, 1])):
+                        f[ff] = facial_ids[k]
+                        f[ff].attrs['subject_id'] = subject_id
+        else:
+            raise ValueError('resource type is not valid.')
+        
+    def register_facial_ids(self):
+        """Register facial ids."""
+        if self.conf['resource_type'] == RESOURCE_TYPE_UCCS:
+            db = pd.read_csv('subject_image_db.csv')
+            db = db.iloc[:, 1:]
+            db_g = db.groupby('subject_id')
+    
+            db_facial_id = pd.DataFrame(columns=['subject_id', 'facial_id'])
             for subject_id in db_g.groups.keys():
                 if subject_id == -1:
                     continue
@@ -656,52 +706,58 @@ class FaceIdentifier(object):
                 images = []
                 
                 for ff in list(df.iloc[:, 1]):
-                    image = imread(os.path.join('subject_faces', ff))
+                    image = imread(os.path.join(self.raw_data_path, 'subject_faces', ff))
                     images.append(image/255)
                 
                 images = np.asarray(images)
                 
                 # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
                 facial_ids = self.fid_extractor.predict(images)
-
-                for k, ff in enumerate(list(df.iloc[:, 1])):
-                    f[ff] = facial_ids[k]
-                    f[ff].attrs['subject_id'] = subject_id
-
-    def register_facial_ids(self):
-        """Register facial ids."""
-        db = pd.read_csv('subject_image_db.csv')
-        db = db.iloc[:, 1:]
-        db_g = db.groupby('subject_id')
-
-        db_facial_id = pd.DataFrame(columns=['subject_id', 'facial_id'])
-        for subject_id in db_g.groups.keys():
-            if subject_id == -1:
-                continue
+                facial_id = np.asarray(pd.DataFrame(facial_ids).mean())
+                
+                db_facial_id = pd.concat([db_facial_id, pd.DataFrame({'subject_id': [subject_id]
+                                                                      , 'facial_id': [facial_id]})])
             
-            # Get face images of a subject id.
-            df = db_g.get_group(subject_id)
-            images = []
+            # Save db.
+            db_facial_id.index = db_facial_id.subject_id
+            db_facial_id = db_facial_id.to_dict()['facial_id']
             
-            for ff in list(df.iloc[:, 1]):
-                image = imread(os.path.join('subject_faces', ff))
-                images.append(image/255)
+            with open('ref_facial_id_db.pickle', 'wb') as f:
+                pickle.dump(db_facial_id, f)
+        elif self.conf['resource_type'] == RESOURCE_TYPE_VGGFACE2:
+            """Register facial ids."""
+            db = pd.read_csv('subject_image_vggface2_db.csv')
+            db = db.iloc[:, 1:]
+            db_g = db.groupby('subject_id')
+    
+            db_facial_id = pd.DataFrame(columns=['subject_id', 'facial_id'])
+            for subject_id in db_g.groups.keys():
+                if subject_id == -1:
+                    continue
+                
+                # Get face images of a subject id.
+                df = db_g.get_group(subject_id)
+                images = []
+                
+                for ff in list(df.iloc[:, 1]):
+                    image = imread(os.path.join(self.raw_data_path, 'subject_faces_vggface2', ff))
+                    images.append(image/255)
+                
+                images = np.asarray(images)
+                
+                # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
+                facial_ids = self.fid_extractor.predict(images)
+                facial_id = np.asarray(pd.DataFrame(facial_ids).mean())
+                
+                db_facial_id = pd.concat([db_facial_id, pd.DataFrame({'subject_id': [subject_id]
+                                                                      , 'facial_id': [facial_id]})])
             
-            images = np.asarray(images)
+            # Save db.
+            db_facial_id.index = db_facial_id.subject_id
+            db_facial_id = db_facial_id.to_dict()['facial_id']
             
-            # Calculate facial ids and an averaged facial id of a subject id. Mean, Mode, Median?
-            facial_ids = self.fid_extractor.predict(images)
-            facial_id = np.asarray(pd.DataFrame(facial_ids).mean())
-            
-            db_facial_id = pd.concat([db_facial_id, pd.DataFrame({'subject_id': [subject_id]
-                                                                  , 'facial_id': [facial_id]})])
-        
-        # Save db.
-        db_facial_id.index = db_facial_id.subject_id
-        db_facial_id = db_facial_id.to_dict()['facial_id']
-        
-        with open('ref_facial_id_db.pickle', 'wb') as f:
-            pickle.dump(db_facial_id, f)
+            with open('ref_facial_id_vggface2_db.pickle', 'wb') as f:
+                pickle.dump(db_facial_id, f)            
 
     def evaluate(self):
         """Evaluate."""
@@ -1131,6 +1187,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())
@@ -1146,6 +1203,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())          
@@ -1166,6 +1224,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         x = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights())
@@ -1185,6 +1244,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())
@@ -1200,6 +1260,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())          
@@ -1220,6 +1281,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         x = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights())
@@ -1239,6 +1301,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())
@@ -1254,6 +1317,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())          
@@ -1274,6 +1338,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         x = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights())
@@ -1293,6 +1358,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())
@@ -1308,6 +1374,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())          
@@ -1328,6 +1395,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         x = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights())
@@ -1347,6 +1415,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())
@@ -1362,6 +1431,7 @@ class FaceIdentifier(object):
             inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
             x = LeakyReLU(alpha=0.1)(x)
+            x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
             x = inv_norm_layer(x)   
             x = deconv_layer(x)
             deconv_layer.set_weights(conv_layer.get_weights())          
@@ -1382,6 +1452,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         x = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights()) 
@@ -1397,6 +1468,7 @@ class FaceIdentifier(object):
         inv_norm_layer = BatchNormalization.from_config(norm_layer.get_config())
 
         x = LeakyReLU(alpha=0.1)(x)
+        x = Lambda(lambda x: K.l2_normalize(x, axis=-1))(x)
         x = inv_norm_layer(x)   
         output = deconv_layer(x)
         deconv_layer.set_weights(conv_layer.get_weights())
@@ -1404,6 +1476,232 @@ class FaceIdentifier(object):
         self.recon_model = Model(inputs=[input1], outputs=[output])
         self.recon_model.trainable = True
         self.recon_model.save('face_vijnana_recon.h5')    
+
+    class TrainingSequence(Sequence):
+        """Training data set sequence."""
+        
+        def __init__(self, raw_data_path, hps, nn_arch, load_flag=True):
+            if load_flag:
+                with open('img_triplet_pairs.pickle', 'rb') as f:
+                    self.img_triplet_pairs = pickle.load(f)
+                    self.img_triplet_pairs = self.img_triplet_pairs
+                    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.nn_arch = nn_arch
+                self.db = pd.read_csv('subject_image_db.csv')
+                self.db = self.db.iloc[:, 1:]
+
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
+                
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1    
+            else:    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.db = pd.read_csv('subject_image_db.csv')
+                self.db = self.db.iloc[:, 1:]
+                self.t_indexes = np.asarray(self.db.index)
+                self.db_g = self.db.groupby('subject_id')
+                
+                self.img_triplet_pairs = []
+                valid_indexes = self.t_indexes
+                
+                for i in self.db_g.groups.keys():                
+                    df = self.db_g.get_group(i)
+                    ex_indexes2 = np.asarray(df.index)
+                    
+                    ex_inv_idxes = []
+                    for v in valid_indexes: 
+                        if (ex_indexes2 == v).any():
+                            ex_inv_idxes.append(False)
+                        else:
+                            ex_inv_idxes.append(True)
+                    ex_inv_idxes = np.asarray(ex_inv_idxes)
+                    valid_indexes2 = valid_indexes[ex_inv_idxes]   
+                    
+                    # Triplet sample pair.
+                    for k in range(0, ex_indexes2.shape[0] - 1):
+                        for l in range(k + 1, ex_indexes2.shape[0]):
+                            self.img_triplet_pairs.append((ex_indexes2[k]
+                                                   , ex_indexes2[l]
+                                                   , np.random.choice(valid_indexes2, size=1)[0])) 
+                
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
+                
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1
+                
+                # Shuffle image pairs.
+                shuffle(self.img_triplet_pairs)
+                
+                with open('img_triplet_pairs.pickle', 'wb') as f:
+                    pickle.dump(self.img_triplet_pairs, f)
+                
+        def __len__(self):
+            return self.hps['step']
+        
+        def __getitem__(self, index):
+            images_a = []
+            images_p = []
+            images_n = []
+            
+            # Check the last index.
+            if index == (self.hps['step'] - 1):
+                for bi in range(index * self.batch_size, len(self.img_triplet_pairs)):
+                    # Get the anchor and comparison images.
+                    image_a = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)
+            
+            else:
+                for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
+                    # Get the anchor and comparison images.
+                    image_a = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)                 
+                                                                                                                     
+            return ({'input_a': np.asarray(images_a)
+                     , 'input_p': np.asarray(images_p)
+                     , 'input_n': np.asarray(images_n)}
+                     , {'output': np.zeros(shape=(len(images_a), 192))})
+            
+    class TrainingSequenceVGGFace2(Sequence):
+        """Training data set sequence."""
+        
+        def __init__(self, raw_data_path, hps, nn_arch, load_flag=True):
+            if load_flag:
+                with open('img_triplet_pairs_vggface2.pickle', 'rb') as f:
+                    self.img_triplet_pairs = pickle.load(f)
+                    self.img_triplet_pairs = self.img_triplet_pairs
+                    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.nn_arch = nn_arch
+                self.db = pd.read_csv('subject_image_vggface2_db.csv')
+                self.db = self.db.iloc[:, 1:]
+
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
+                
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1    
+            else:    
+                # Create indexing data of positive and negative cases.
+                self.raw_data_path = raw_data_path
+                self.hps = hps
+                self.db = pd.read_csv('subject_image_vggface2_db.csv')
+                self.db = self.db.iloc[:, 1:]
+                self.t_indexes = np.asarray(self.db.index)
+                self.db_g = self.db.groupby('subject_id')
+                
+                self.img_triplet_pairs = []
+                valid_indexes = self.t_indexes
+                
+                for i in self.db_g.groups.keys():                
+                    df = self.db_g.get_group(i)
+                    ex_indexes2 = np.asarray(df.index)
+                    
+                    ex_inv_idxes = []
+                    for v in valid_indexes: 
+                        if (ex_indexes2 == v).any():
+                            ex_inv_idxes.append(False)
+                        else:
+                            ex_inv_idxes.append(True)
+                    ex_inv_idxes = np.asarray(ex_inv_idxes)
+                    valid_indexes2 = valid_indexes[ex_inv_idxes]   
+                    
+                    # Triplet sample pair.
+                    for k in range(0, ex_indexes2.shape[0] - 1):
+                        for l in range(k + 1, ex_indexes2.shape[0]):
+                            self.img_triplet_pairs.append((ex_indexes2[k]
+                                                   , ex_indexes2[l]
+                                                   , np.random.choice(valid_indexes2, size=1)[0])) 
+                
+                self.batch_size = self.hps['batch_size']
+                self.hps['step'] = len(self.img_triplet_pairs) // self.batch_size
+                
+                if len(self.img_triplet_pairs) % self.batch_size != 0:
+                    self.hps['step'] +=1
+                
+                # Shuffle image pairs.
+                shuffle(self.img_triplet_pairs)
+                
+                with open('img_triplet_pairs_vggface2.pickle', 'wb') as f:
+                    pickle.dump(self.img_triplet_pairs, f)
+                
+        def __len__(self):
+            return self.hps['step']
+        
+        def __getitem__(self, index):
+            images_a = []
+            images_p = []
+            images_n = []
+            
+            # Check the last index.
+            if index == (self.hps['step'] - 1):
+                for bi in range(index * self.batch_size, len(self.img_triplet_pairs)):
+                    # Get the anchor and comparison images.
+                    image_a = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)
+            
+            else:
+                for bi in range(index * self.batch_size, (index + 1) * self.batch_size):
+                    # Get the anchor and comparison images.
+                    image_a = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][0], 'face_file']))
+                    image_p = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][1], 'face_file']))
+                    image_n = imread(os.path.join(self.raw_data_path
+                                                     , 'subject_faces_vggface2'
+                                                     , self.db.loc[self.img_triplet_pairs[bi][2], 'face_file']))
+                    
+                    images_a.append(image_a/255)
+                    images_p.append(image_p/255)
+                    images_n.append(image_n/255)                 
+                                                                                                                     
+            return ({'input_a': np.asarray(images_a)
+                     , 'input_p': np.asarray(images_p)
+                     , 'input_n': np.asarray(images_n)}
+                     , {'output': np.zeros(shape=(len(images_a), 192))}) 
                 
 def main():
     """Main."""
@@ -1422,7 +1720,7 @@ def main():
         create_db_fi(conf)
         te = time.time()
         
-        print('Elasped time: {0:f}s'.format(te-ts))            
+        print('Elasped time: {0:f}s'.format(te-ts)) 
     elif conf['fi_conf']['mode'] == 'train':        
         # Train.
         fi = FaceIdentifier(conf)
