@@ -59,7 +59,7 @@ or
 
 ```pip install -e ./```
 
-```cd face_vijnana_yolov3\src\space```
+```cd src\space```
 
 ### Download yolov3 pretrained model weight
 
