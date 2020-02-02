@@ -54,8 +54,11 @@ or
 ### Install face vijnana yolov3
 
 ```cd face_vijnana_yolov3```
+
 ```python setup.py sdist bdist_wheel```
+
 ```pip install -e ./```
+
 ```cd face_vijnana_yolov3\src\space```
 
 ### Download yolov3 pretrained model weight
