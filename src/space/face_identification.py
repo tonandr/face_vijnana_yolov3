@@ -170,18 +170,10 @@ def create_db_fi(conf):
     elif conf['resource_type'] == RESOURCE_TYPE_VGGFACE2:        
         raw_data_path = conf['raw_data_path']
         nn_arch = conf['nn_arch']
-        
-        if not os.path.isdir(os.path.join(raw_data_path, 'subject_faces_vggface2')):
-            os.mkdir(os.path.join(raw_data_path, 'subject_faces_vggface2'))
-        else:
-            shutil.rmtree(os.path.join(raw_data_path, 'subject_faces_vggface2'))
-            os.mkdir(os.path.join(os.path.join(raw_data_path, 'subject_faces_vggface2')))    
-    
-        df = pd.read_csv(os.path.join(raw_data_path, 'loose_bb_train.csv'))
-        
+                
         # Collect face region images and create db, by subject ids.
         pClient = ipp.Client()
-        pView = pClient.load_balanced_view() #pClient[:]
+        pView = pClient[:]
         
         pView.push({'raw_data_path': raw_data_path, 'nn_arch': nn_arch})
         
@@ -191,10 +183,25 @@ def create_db_fi(conf):
             import cv2 as cv
             from skimage.io import imread, imsave
         
+        if not os.path.isdir(os.path.join(raw_data_path, 'subject_faces_vggface2')):
+            os.mkdir(os.path.join(raw_data_path, 'subject_faces_vggface2'))
+        else:
+            shutil.rmtree(os.path.join(raw_data_path, 'subject_faces_vggface2'))
+            os.mkdir(os.path.join(os.path.join(raw_data_path, 'subject_faces_vggface2')))    
+    
+        df = pd.read_csv(os.path.join(raw_data_path, 'loose_bb_train.csv'))
+        
         db = pd.DataFrame(columns=['subject_id', 'face_file', 'w', 'h'])
-        dfs = [df.iloc[i] for i in range(df.shape[0])]
+        #dfs = [df.iloc[i] for i in range(df.shape[0])]
+        dfs = [df.iloc[i] for i in range(100)]
         
         res = pView.map_sync(save_extracted_face, dfs)
+        
+        try:
+            res.remove(None)
+        except:
+            pass
+        
         db = pd.concat(res)
             
         # Save db.
@@ -205,6 +212,9 @@ def create_db_fi(conf):
 def save_extracted_face(df):
     global raw_data_path, nn_arch
     import os
+    cv = cv2
+    pd = pandas
+    np = numpy
     
     id_filename = df.iloc[0].split('/')
     identity = id_filename[0]
@@ -215,7 +225,7 @@ def save_extracted_face(df):
     h = df.iloc[4]
     
     if x < 0 or y < 0 or w <=0 or h <=0:
-        continue
+        return None
     
     # Load an image.
     image = imread(os.path.join(raw_data_path, 'train', identity, file_name))

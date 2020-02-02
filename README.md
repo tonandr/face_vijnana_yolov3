@@ -27,26 +27,35 @@ Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 
 
 ### After installing Anaconda, create the environment
 
-```conda create -n tf36 python=3.6```
+```conda create -n tf1_p36 python=3.6```
 
 ### Go to the created environment
 
-```conda activate tf36```
+```conda activate tf1_p36```
 
 ### Install [CUDA Toolkit 10.1](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&target_distro=Ubuntu&target_version=1604&target_type=debnetwork)
 
 ### Install [cuDNN v7.6.0 for CUDA 10.1](https://developer.nvidia.com/rdp/cudnn-download) 
 
-### Install necessary python packages
+### Install tensorflow
 
-```pip install tensorflow-gpu keras scikit-image scikit-learn pandas Pillow```
+```conda install tensorflow==1.13.1```
 
-```conda install opencv```
+or
+
+```conda install tensorflow-gpu==1.13.1```
+
 
 ### Download the face recognition git repository
 
 ```git clone https://github.com/tonandr/face_vijnana_yolov3.git```
 
+
+### Install face vijnana yolov3
+
+```cd face_vijnana_yolov3```
+```python setup.py sdist bdist_wheel```
+```pip install -e ./```
 ```cd face_vijnana_yolov3\src\space```
 
 ### Download yolov3 pretrained model weight
@@ -65,12 +74,12 @@ The dataset can be obtained from [UCCS](https://vast.uccs.edu/Opensetface/).
 {
 	"fd_conf": {
 		"mode": "train",
-		"raw_data_path": "/home/ubuntu/face_recog/resource/training",
-		"test_path": "/home/ubuntu/face_recog/resource/validation",
+		"raw_data_path": "/home/ubuntu/face_vijnana_yolov3/resource/training",
+		"test_path": "/home/ubuntu/face_vijnana_yolov3/resource/validation",
 		"output_file_path": "solution_fd.csv",
-		"multi_gpu": true,
+		"multi_gpu": false,
 		"num_gpus": 4,
-		"yolov3_base_model_load": true,
+		"yolov3_base_model_load": false,
 		"hps": {
 			"lr": 0.0001,
 			"beta_1": 0.99,
@@ -95,10 +104,10 @@ The dataset can be obtained from [UCCS](https://vast.uccs.edu/Opensetface/).
 	
 	"fi_conf": {
 		"mode": "fid_db",
-		"raw_data_path": "/home/ubuntu/face_recog/resource/training",
-		"test_path": "/home/ubuntu/face_recog/resource/validation",
+		"raw_data_path": "/home/ubuntu/face_vijnana_yolov3/resource/training",
+		"test_path": "/home/ubuntu/face_vijnana_yolov3/resource/validation",
 		"output_file_path": "solution_fi.csv",
-		"multi_gpu": true,
+		"multi_gpu": false,
 		"num_gpus": 4,
 		"yolov3_base_model_load": false,
 		"hps": {
@@ -131,21 +140,6 @@ It is assumed that 4 Tesla K80 GPUs are provided. You should set mode to "train"
 You can download [the pretrained face detection Keras model](https://drive.google.com/open?id=1pzGO4YyR46VaMLNeP4_462vWWydAAnYG).
 It should be moved into face_vijnana_yolov3/src/space.
 
-We have trained it as follows with previous configurations. You can configure them as a new configuration format and train the model.
-
-```
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.001 --beta_1 0.9 --beta_2 0.9 --decay 0.0 --step_per_epoch 500 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 0
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.001 --beta_1 0.9 --beta_2 0.9 --decay 0.0 --step_per_epoch 500 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.9 --beta_2 0.9 --decay 0.0 --step_per_epoch 500 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.9 --beta_2 0.9 --decay 0.0 --step_per_epoch 500 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.9 --decay 0.0 --step_per_epoch 500 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /data/home/ubuntu/nfr/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 160 --epochs 1 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1 # Multi gpu.
-python face_detection.py --mode train --raw_data_path /home/ubuntu/face_recog/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 40 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /home/ubuntu/face_recog/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 40 --epochs 12 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /home/ubuntu/face_recog/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 40 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-python face_detection.py --mode train --raw_data_path /home/ubuntu/face_recog/resource/training --image_size 416 --num_filters 6 --lr 0.0001 --beta_1 0.99 --beta_2 0.99 --decay 0.0 --batch_size 40 --epochs 6 --face_conf_th 0.5 --nms_iou_th 0.5 --num_cands 60 --model_loading 1
-```
-
 ### Evaluate the model via generating detection result images, or test the model
 
 Set mode to 'evaluate' or 'test', and you should set model_loading to true.
@@ -158,15 +152,21 @@ Mode should be set to "data" in fi_conf.
 
 ```python face_identification.py```
 
+You can download [subject faces](https://drive.google.com/open?id=1rq_0Fd7Wqmug6c6wfBxzpys-z8yQRgje) and 
+[the relevant meta file](https://drive.google.com/open?id=1zUhU7v4eB7Fdx-QVXng0ksg_77PIiytW). 
+
+The subject face folder should be moved to the resource folder, and the relevant meta file should be moved to 
+the src/space folder.
+
 ### Train the face identification model 
 
-Set mode to "train". To train the model with previous weights, you should set model_loading to 1.
+Set mode to "train". To train the model with previous weights, you should set model_loading to true.
 
 ```python face_identification.py```
 
 ### Evaluate the model via generating detection result images, or test the model 
 
-You should set model_loading to true.
+Set mode to 'evaluate' or 'test', and you should set model_loading to true.
 
 ```python face_identification.py```
 

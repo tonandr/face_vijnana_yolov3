@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="face vijnana yolov3",
-    version="1.0.0",
+    version="1.1.0",
     author="Inwoo Chung",
     author_email="gutomitai@gmail.com",
     description="YoloV3 based Keras face detection and identification model.",
@@ -19,7 +19,7 @@ setuptools.setup(
                       , 'opencv-contrib-python==4.1.1.26'
                       , 'matplotlib==3.1.0'
                       , 'tqdm==4.32.2'
-                      , 'keras'],  # Optional
+                      , 'keras==2.2.4'],  # Optional
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
