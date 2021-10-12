@@ -16,7 +16,7 @@ setuptools.setup(
     install_requires=['scipy==1.3.1'
                       , 'pandas==0.25.1'
                       , 'scikit-image==0.15.0'
-                      , 'opencv-contrib-python==4.1.1.26'
+                      , 'opencv-contrib-python==4.2.0.32'
                       , 'matplotlib==3.1.0'
                       , 'tqdm==4.32.2'
                       , 'ipyparallel'
