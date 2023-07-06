@@ -13,7 +13,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/tonandr/face_vijnana_yolov3",
     packages=setuptools.find_packages(exclude=['analysis', 'samples', 'resource']),
-    install_requires=['scipy==1.3.1'
+    install_requires=['scipy==1.10.0'
                       , 'pandas==0.25.1'
                       , 'scikit-image==0.15.0'
                       , 'opencv-contrib-python==4.2.0.32'
