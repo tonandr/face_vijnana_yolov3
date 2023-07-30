@@ -1,25 +1,18 @@
 # Face vijnana yolov3
-## Face recognition Keras model using yolov3 as a base model and a pretrained model, including face detection and face identification
+## Face detection Keras model using yolov3 as a base model and a pretrained model, including face detection
 ![Imgur](pics/01c2ee2fdfddb91abd41e8b31033d40a_detected.jpg)
 
-Using the pretranied [yolov3 Keras model](https://github.com/experiencor/keras-yolo3), we develop one shot learning face recognition model using Keras.
-The face recognition model consists of face detection and face identification models, and using uncontrained college students face dataset provided by 
-[UCCS](https://vast.uccs.edu/Opensetface/), the face detection and face identification models are trained and evaluated.
-In the face detection model, we have developed referring to [YOLOv3: An Incremental Improvement](https://pjreddie.com/media/files/papers/YOLOv3.pdf), and 
-in the face identification model, we have developed referring to [FaceNet: A Unified Embedding for Face Recognition and Clustering](https://arxiv.org/abs/1503.03832).
+Using the pretranied [yolov3 Keras model](https://github.com/experiencor/keras-yolo3), The face detection model is developed using uncontrained college students face dataset provided by [UCCS](https://vast.uccs.edu/Opensetface/) and referring to [YOLOv3: An Incremental Improvement](https://pjreddie.com/media/files/papers/YOLOv3.pdf).
 
 # Tasks
 - [x] Develop face vijnana yolov3.
 - [x] Train and evaluate face detector with the UCCS dataset.
-- [ ] Train and evaluate face identifier using [a GAN style-based face generator](https://github.com/NVlabs/stylegan) with the UCCS dataset.
-- [ ] Train, evaluate and optimize face vijnana yolov3 with other datasets.
 
 ## Tasks status
-
-[Style based GAN is being developed for virtual face generation](https://github.com/tonandr/keras_unsupervised/tree/master/examples/style_based_gan)
+This project is closed.
 
 ## Test environments
-The face recognition model has been developed and tested on Linux(Ubuntu 16.04.6 LTS), Anaconda 4.6.11, Python 3.6.8, 
+The face detection model has been developed and tested on Linux(Ubuntu 16.04.6 LTS), Anaconda 4.6.11, Python 3.6.8, 
 Tensorflow 1.13.1 (Keras's backend), Keras 2.2.4 and on 8 CPUs, 52 GB memory, 4 x NVIDIA Tesla K80 GPUs.
 
 ## Training and testing procedure
@@ -46,7 +39,7 @@ or
 ```conda install tensorflow-gpu==1.13.1```
 
 
-### Download the face recognition git repository
+### Download the face detection git repository
 
 ```git clone https://github.com/tonandr/face_vijnana_yolov3.git```
 
@@ -222,5 +215,3 @@ We have evaluated face vijnana yolov3's face detection performance with the UCCS
 </table>
 
 There are [face detection result images](https://drive.google.com/open?id=1JelgyzOEN1WNXUl1HKIY2eH_yEcaJ7fA).
-## Face identification performance
-TODO
