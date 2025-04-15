@@ -20,7 +20,7 @@ setuptools.setup(
                       , 'matplotlib==3.1.0'
                       , 'tqdm==4.32.2'
                       , 'ipyparallel'
-                      , 'keras==2.2.4'],  # Optional
+                      , 'keras==3.9.0'],  # Optional
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
