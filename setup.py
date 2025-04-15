@@ -18,7 +18,7 @@ setuptools.setup(
                       , 'scikit-image==0.15.0'
                       , 'opencv-contrib-python==4.2.0.32'
                       , 'matplotlib==3.1.0'
-                      , 'tqdm==4.32.2'
+                      , 'tqdm==4.66.3'
                       , 'ipyparallel'
                       , 'keras==3.9.0'],  # Optional
     classifiers=[
